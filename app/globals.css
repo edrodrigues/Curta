@@ -394,6 +394,46 @@ label.field .l { display: block; font-family: var(--font-mono); font-size: var(-
 
 .wizard-nav { display: flex; justify-content: space-between; margin-top: 2.5rem; max-width: 42rem; }
 
+/* ===== ROTEIRO (STEP 5) ===== */
+.roteiro-section { margin-bottom: 2rem; }
+.roteiro-section + .roteiro-section { border-top: 1px dashed var(--border); padding-top: 1.75rem; }
+.roteiro-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.85rem; flex-wrap: wrap; }
+.roteiro-copy-btn { font-family: var(--font-mono); font-size: 0.75rem; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-dim); background: transparent; border: 1px solid var(--border); border-radius: var(--radius-s); padding: 0.3rem 0.7rem; cursor: pointer; transition: color 0.15s, border-color 0.15s, background 0.15s; }
+.roteiro-copy-btn:hover { color: var(--text); border-color: var(--text-faint); background: var(--bg-raised); }
+.roteiro-copy-btn:active { color: var(--accent); border-color: var(--accent); }
+
+.roteiro-aviso { background: color-mix(in srgb, var(--amber) 12%, var(--bg-sunken)); border-left: 3px solid var(--amber); padding: 0.85rem 1rem 0.95rem; border-radius: var(--radius-s); margin-bottom: 1.5rem; }
+.roteiro-aviso .eyebrow { color: var(--amber); margin-bottom: 0.3rem; }
+.roteiro-aviso p { margin: 0; font-size: var(--step--1); color: var(--text-dim); }
+
+.roteiro-table-wrap { overflow-x: auto; max-height: 26rem; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-m); background: var(--bg-raised); }
+.roteiro-table { width: 100%; border-collapse: collapse; font-size: var(--step--1); }
+.roteiro-table thead th { position: sticky; top: 0; background: var(--bg-sunken); font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.04em; font-size: 0.6875rem; color: var(--text-dim); text-align: left; padding: 0.65rem 0.85rem; border-bottom: 1px solid var(--border); }
+.roteiro-table tbody td { padding: 0.65rem 0.85rem; vertical-align: top; border-bottom: 1px solid var(--border); line-height: 1.5; }
+.roteiro-table tbody tr:last-child td { border-bottom: none; }
+.roteiro-table tbody tr:nth-child(even) { background: color-mix(in srgb, var(--bg-sunken) 50%, var(--bg-raised)); }
+.roteiro-table td:first-child { font-family: var(--font-mono); white-space: nowrap; color: var(--text-dim); }
+
+.roteiro-md-fallback { font-family: var(--font-mono); font-size: var(--step--1); white-space: pre-wrap; padding: 1rem; margin: 0; color: var(--text-dim); }
+
+.roteiro-narracao { width: 100%; min-height: 11rem; font-family: var(--font-body); font-size: var(--step-0); line-height: 1.7; padding: 1rem 1.1rem; background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--radius-m); color: var(--text); resize: vertical; }
+
+.roteiro-voz-card { background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--radius-m); padding: 1rem 1.2rem; margin-top: 1rem; }
+.roteiro-voz-card dl { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin: 0; }
+.roteiro-voz-card dt { font-family: var(--font-mono); font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim); margin-bottom: 0.25rem; }
+.roteiro-voz-card dd { font-family: var(--font-display); font-size: var(--step-0); margin: 0; }
+
+.roteiro-trilha-card { background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--radius-m); padding: 1rem 1.2rem; margin-top: 1rem; }
+.roteiro-trilha-card .track-row { margin-bottom: 0.75rem; }
+.roteiro-mood-source { font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-faint); margin-left: 0.6rem; }
+
+.roteiro-actions { display: flex; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; margin-top: 1.75rem; }
+
+@media (max-width: 560px) {
+  .roteiro-voz-card dl { grid-template-columns: 1fr; }
+  .roteiro-section-head { flex-direction: row; }
+}
+
 /* ===== PROJECTS ===== */
 .projects-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(15.5rem, 1fr)); gap: 1.25rem; padding: 2rem 0 4rem; }
 .proj-card { border: 1px solid var(--border); border-radius: var(--radius-m); overflow: hidden; background: var(--bg-raised); box-shadow: var(--card-shadow); }

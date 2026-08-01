@@ -386,11 +386,38 @@ function WizardShell() {
     setStepIndex(0);
   }
 
+  function copyToClipboard(text: string, label: string) {
+    if (typeof window === 'undefined' || !text) return;
+    const fallback = () => {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        toast('Copiado: ' + label);
+      } catch {
+        toast('Não foi possível copiar. Selecione e use Ctrl+C.');
+      }
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(
+        () => toast('Copiado: ' + label),
+        fallback
+      );
+    } else {
+      fallback();
+    }
+  }
+
   const eyebrowText = `Passo ${stepIndex + 1} de ${WIZ_STEPS.length}`;
   const navVisible = key !== 'gerando' && key !== 'roteiro' && key !== 'exportar';
   const roteiro = wiz.roteiro;
   const tableHtml = roteiro ? renderMarkdownTable(roteiro.tabela_md) : '';
-  const styleObj = roteiro ? matchStyle(roteiro.voz.estilo) : null;
   const trackName = roteiro ? matchTrack(roteiro.trilha_mood) : TRACKS[0];
 
   return (
@@ -515,14 +542,34 @@ function WizardShell() {
           </div>
         )}
         <div className="roteiro-section">
-          <p className="eyebrow" style={{ marginBottom: '0.75rem' }}>Parte 1 — Direção técnica</p>
+          <div className="roteiro-section-head">
+            <p className="eyebrow">Parte 1 — Direção técnica</p>
+            <button
+              className="roteiro-copy-btn"
+              onClick={() => copyToClipboard(roteiro?.tabela_md || '', 'tabela técnica')}
+              disabled={!roteiro?.tabela_md}
+              aria-label="Copiar tabela técnica em markdown"
+            >
+              Copiar
+            </button>
+          </div>
           <div
             className="roteiro-table-wrap"
             dangerouslySetInnerHTML={{ __html: tableHtml }}
           />
         </div>
         <div className="roteiro-section">
-          <p className="eyebrow" style={{ marginBottom: '0.75rem' }}>Parte 2 — Narração (ElevenLabs)</p>
+          <div className="roteiro-section-head">
+            <p className="eyebrow">Parte 2 — Narração (ElevenLabs)</p>
+            <button
+              className="roteiro-copy-btn"
+              onClick={() => copyToClipboard(roteiro?.narracao_texto || '', 'narração')}
+              disabled={!roteiro?.narracao_texto}
+              aria-label="Copiar texto de narração"
+            >
+              Copiar
+            </button>
+          </div>
           <textarea
             className="roteiro-narracao"
             readOnly
@@ -542,10 +589,15 @@ function WizardShell() {
           )}
         </div>
         <div className="roteiro-section">
-          <p className="eyebrow" style={{ marginBottom: '0.5rem' }}>Trilha sonora (mood)</p>
-          <div className="track-row">
-            <span className={`track-chip is-selected`}>{trackName}</span>
-            <span className="roteiro-mood-source">derivado de: {roteiro?.trilha_mood || 'ambiente calmo'}</span>
+          <div className="roteiro-section-head">
+            <p className="eyebrow">Trilha sonora (mood)</p>
+          </div>
+          <div className="roteiro-trilha-card">
+            <div className="track-row">
+              <span className="track-chip is-selected">{trackName}</span>
+              <span className="roteiro-mood-source">derivado de: {roteiro?.trilha_mood || 'ambiente calmo'}</span>
+            </div>
+            {key === 'roteiro' && <AudioPreview />}
           </div>
         </div>
         <div className="roteiro-actions">
@@ -556,9 +608,6 @@ function WizardShell() {
             Continuar
           </button>
         </div>
-        <p style={{ fontFamily: 'var(--font-mono)', marginTop: '0.75rem', opacity: 0.7, fontSize: '0.85rem' }}>
-          Estilo derivado: {styleObj?.nome ?? '—'} · Trilha: {trackName}
-        </p>
       </div>
 
       {/* Step 6: Preview vídeo */}
