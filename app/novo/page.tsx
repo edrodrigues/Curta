@@ -13,7 +13,9 @@ import {
   type Brief,
   type Project,
   type RoteiroOutput,
+  type SceneRender,
   type WizardData,
+  type VideoStage,
 } from '@/lib/types';
 import { useStore, useToast } from '@/lib/store';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -99,6 +101,10 @@ const initialWiz: WizardData = {
   videoFormat: null,
   brief: { ...emptyBrief },
   roteiro: null,
+  sceneRenders: [],
+  finalVideoUrl: null,
+  videoStage: 'idle',
+  videoCostEstimateUsd: null,
 };
 
 type Stage = 'idle' | 'running' | 'done';
@@ -262,6 +268,10 @@ function WizardShell() {
       toast('Gere o roteiro antes de avançar.');
       return false;
     }
+    if (key === 'roteiro' && wiz.roteiro && (!wiz.roteiro.cenas || wiz.roteiro.cenas.length === 0)) {
+      toast('Roteiro sem cenas para gerar o vídeo. Refaça o roteiro.');
+      return false;
+    }
     return true;
   }
 
@@ -271,14 +281,89 @@ function WizardShell() {
       setStage('idle');
       setGenerating(false);
       setProgress(0);
-      setWiz((w) => ({ ...w, roteiro: null }));
+      setWiz((w) => ({ ...w, roteiro: null, sceneRenders: [], finalVideoUrl: null, videoStage: 'idle', videoCostEstimateUsd: null }));
       goToStep(stepIndex + 1);
+      return;
+    }
+    if (key === 'roteiro') {
+      void handleContinuarParaVideo();
       return;
     }
     if (stepIndex < WIZ_STEPS.length - 1) goToStep(stepIndex + 1);
   }
   function goBack() {
     if (stepIndex > 0) goToStep(stepIndex - 1);
+  }
+
+  const videoRunningRef = useRef(false);
+  const videoTokenRef = useRef<string>('');
+
+  async function handleContinuarParaVideo() {
+    const roteiro = wiz.roteiro;
+    if (!roteiro || !roteiro.cenas || roteiro.cenas.length === 0) {
+      toast('Roteiro sem cenas para gerar o vídeo.');
+      return;
+    }
+    if (videoRunningRef.current) return;
+    videoRunningRef.current = true;
+
+    const token = 'f' + Date.now().toString(16) + Math.random().toString(16).slice(2);
+    videoTokenRef.current = token;
+
+    const seed: SceneRender[] = roteiro.cenas.map((c) => ({
+      index: c.index,
+      status: 'pendente',
+    }));
+    setWiz((w) => ({ ...w, sceneRenders: seed, finalVideoUrl: null, videoStage: 'running', videoCostEstimateUsd: null }));
+
+    goToStep(stepIndex + 1);
+
+    try {
+      const res = await fetch('/api/video/runs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cenas: roteiro.cenas.map((c) => ({ prompt_en: c.prompt_en, duration_hint: c.duration_hint })),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok || !Array.isArray(data.jobs)) {
+        const msg = data?.message || 'Falha ao iniciar a geração dos clipes.';
+        toast(msg);
+        setWiz((w) => ({ ...w, videoStage: 'error' }));
+        videoRunningRef.current = false;
+        return;
+      }
+      const jobs: Array<{ index: number; run_id: string | null; status: string; error?: string }> = data.jobs;
+      const estCost = typeof data.est_cost_usd === 'number' ? data.est_cost_usd : null;
+
+      setWiz((w) => ({
+        ...w,
+        sceneRenders: w.sceneRenders.map((s) => {
+          const j = jobs.find((jj) => jj.index === s.index);
+          if (!j) return s;
+          if (j.status === 'falhou') {
+            return { ...s, status: 'falhou', error: j.error };
+          }
+          return { ...s, status: 'pendente', run_id: j.run_id || undefined };
+        }),
+        videoCostEstimateUsd: estCost,
+      }));
+
+      const allFailed = jobs.every((j) => j.status === 'falhou');
+      if (allFailed) {
+        toast('Todos os clipes falharam ao iniciar.');
+        setWiz((w) => ({ ...w, videoStage: 'error' }));
+        videoRunningRef.current = false;
+        return;
+      }
+
+      toast(`${jobs.filter((j) => j.status !== 'falhou').length} clipes iniciados na Monid.`);
+    } catch {
+      toast('Falha de conexão ao iniciar a geração dos clipes.');
+      setWiz((w) => ({ ...w, videoStage: 'error' }));
+      videoRunningRef.current = false;
+    }
   }
 
   async function analyzeLink() {
@@ -394,6 +479,113 @@ function WizardShell() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, pendingUrl, autoAnalyzed, analyzing]);
+
+  useEffect(() => {
+    if (key !== 'preview-video') return;
+    if (wiz.videoStage !== 'running') return;
+    const pending = wiz.sceneRenders.filter(
+      (s) => s.status === 'pendente' || s.status === 'rodando'
+    );
+    if (pending.length === 0) return;
+
+    let cancelled = false;
+    const tick = async () => {
+      if (cancelled) return;
+      const toPoll = wiz.sceneRenders
+        .filter((s) => s.status === 'pendente' || s.status === 'rodando')
+        .filter((s) => !!s.run_id)
+        .map((s) => ({ index: s.index, run_id: s.run_id! }));
+      if (toPoll.length === 0) return;
+      try {
+        const res = await fetch('/api/video/poll', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ runs: toPoll }),
+        });
+        const data = await res.json();
+        if (cancelled) return;
+        if (!res.ok || !data.ok || !Array.isArray(data.jobs)) return;
+        const jobs: Array<{ index: number; run_id?: string; status: string; clip_url?: string; error?: string }> = data.jobs;
+        setWiz((w) => {
+          const updated = w.sceneRenders.map((s) => {
+            const j = jobs.find((jj) => jj.index === s.index);
+            if (!j) return s;
+            if (j.status === 'concluido' && j.clip_url) {
+              return { ...s, status: 'concluido' as const, clip_url: j.clip_url };
+            }
+            if (j.status === 'falhou') {
+              return { ...s, status: 'falhou' as const, error: j.error };
+            }
+            if (j.status === 'rodando') {
+              return { ...s, status: 'rodando' as const };
+            }
+            return s;
+          });
+          return { ...w, sceneRenders: updated };
+        });
+      } catch {
+        /* transient; retry on next tick */
+      }
+    };
+    void tick();
+    const id = window.setInterval(tick, 6000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, wiz.videoStage, wiz.sceneRenders]);
+
+  useEffect(() => {
+    if (key !== 'preview-video') return;
+    if (wiz.videoStage !== 'running') return;
+    if (wiz.sceneRenders.length === 0) return;
+    const allDone = wiz.sceneRenders.every((s) => s.status === 'concluido' || s.status === 'falhou');
+    if (!allDone) return;
+    const anySuccess = wiz.sceneRenders.some((s) => s.status === 'concluido' && s.clip_url);
+    if (!anySuccess) {
+      setWiz((w) => ({ ...w, videoStage: 'error' }));
+      videoRunningRef.current = false;
+      toast('Todos os clipes falharam na geração.');
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      setWiz((w) => ({ ...w, videoStage: 'assembling' }));
+      try {
+        const ordered = wiz.sceneRenders
+          .filter((s) => s.status === 'concluido' && !!s.clip_url)
+          .sort((a, b) => a.index - b.index)
+          .map((s) => s.clip_url!);
+        const res = await fetch('/api/video/assemble', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ clip_urls: ordered, project_id: videoTokenRef.current }),
+        });
+        const data = await res.json();
+        if (cancelled) return;
+        if (!res.ok || !data.ok || !data.video_url) {
+          toast(data?.message || 'Falha ao montar o vídeo final.');
+          setWiz((w) => ({ ...w, videoStage: 'error' }));
+          videoRunningRef.current = false;
+          return;
+        }
+        setWiz((w) => ({ ...w, finalVideoUrl: data.video_url, videoStage: 'done' }));
+        videoRunningRef.current = false;
+        toast('Vídeo montado com sucesso.');
+      } catch {
+        if (cancelled) return;
+        toast('Falha de conexão ao montar o vídeo final.');
+        setWiz((w) => ({ ...w, videoStage: 'error' }));
+        videoRunningRef.current = false;
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, wiz.videoStage, wiz.sceneRenders]);
 
   function startGeneration() {
     const cost = wiz.duration === 60 ? 2 : 1;
@@ -760,19 +952,96 @@ function WizardShell() {
       </div>
 
       {/* Step 7: Preview vídeo */}
-      <div className={`step-panel${key === 'preview-video' ? ' is-active' : ''}`} data-step="preview-video">
+      <div className={`step-panel wide${key === 'preview-video' ? ' is-active' : ''}`} data-step="preview-video">
         <p className="eyebrow step-eyebrow">{eyebrowText}</p>
         <h2 className="step-title">Prévia do vídeo</h2>
-        <p className="step-sub">Um rascunho rápido de como as cenas vão se encaixar, a partir do roteiro.</p>
-        <div className="preview-stage">
-          <span className="preview-badge">Prévia · rascunho</span>
-          {key === 'preview-video' && (
-            <KineticPreview
-              script={roteiro?.narracao_texto || ''}
-              title={wiz.brief.produto || 'Vídeo'}
-            />
-          )}
-        </div>
+        <p className="step-sub">Gerando um clipe por cena com MiniMax·Hailuo-2.3 via Monid e montando o vídeo final. Cada cena pode levar alguns minutos.</p>
+
+        {(() => {
+          const renders = wiz.sceneRenders;
+          const cenas = roteiro?.cenas || [];
+          const total = renders.length;
+          const done = renders.filter((r) => r.status === 'concluido').length;
+          const failed = renders.filter((r) => r.status === 'falhou').length;
+          const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+          const running = wiz.videoStage === 'running' || wiz.videoStage === 'assembling';
+          const headline =
+            wiz.videoStage === 'assembling'
+              ? 'Montando vídeo final…'
+              : running
+                ? `Gerando cenas — ${done}/${total} prontas`
+                : wiz.videoStage === 'done'
+                  ? `Vídeo pronto · ${total} ${total === 1 ? 'cena' : 'cenas'}`
+                  : wiz.videoStage === 'error'
+                    ? 'Falha na geração'
+                    : 'Aguardando início…';
+
+          return (
+          <>
+            {wiz.videoCostEstimateUsd != null && (
+              <p className="video-cost-est">
+                Custo estimado: <b>${wiz.videoCostEstimateUsd.toFixed(2)}</b> · MiniMax Hailuo-2.3
+              </p>
+            )}
+
+            {total > 0 && (
+              <div className="progress-track">
+                <div className="progress-fill" style={{ width: (wiz.videoStage === 'assembling' ? 100 : pct) + '%' }} />
+              </div>
+            )}
+            <p style={{ fontFamily: 'var(--font-mono)', marginTop: '0.5rem', marginBottom: '1.25rem' }}>{headline}</p>
+
+            {total > 0 && (
+              <div className="scene-grid">
+                {renders.map((r) => {
+                  const cena = cenas.find((c) => c.index === r.index);
+                  const statusLabel =
+                    r.status === 'pendente' ? 'na fila'
+                      : r.status === 'rodando' ? 'gerando'
+                        : r.status === 'concluido' ? 'pronta'
+                          : 'falhou';
+                  const dur = cena?.duration_hint ?? 6;
+                  return (
+                    <div key={r.index} className={`scene-card is-${r.status}`}>
+                      <div className="scene-card-head">
+                        <span className="scene-index">Cena {r.index + 1}</span>
+                        <span className="scene-pill">{statusLabel}{r.status === 'rodando' && <span className="thinking-dots"><i /><i /><i /></span>}</span>
+                      </div>
+                      <p className="scene-meta">{cena?.tempo || ''} · {dur}s</p>
+                      {cena?.audio_pt && <p className="scene-audio">{cena.audio_pt}</p>}
+                      {r.error && <p className="scene-error">{r.error}</p>}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {failed > 0 && total > 0 && failed === total && (
+              <div className="roteiro-aviso" style={{ marginTop: '1.25rem' }}>
+                <p className="eyebrow">Erro</p>
+                <p>Todas as cenas falharam na geração. Verifique o saldo da Monid e tente novamente.</p>
+              </div>
+            )}
+
+            {wiz.videoStage === 'done' && wiz.finalVideoUrl && (
+              <div className="preview-stage final-stage" style={{ marginTop: '1.25rem' }}>
+                <span className="preview-badge">Pronto</span>
+                <video className="final-video" src={wiz.finalVideoUrl} controls playsInline preload="metadata" />
+              </div>
+            )}
+
+            {(wiz.videoStage === 'idle' || wiz.videoStage === 'error') && total === 0 && key === 'preview-video' && (
+              <div className="preview-stage">
+                <span className="preview-badge">Prévia · rascunho</span>
+                <KineticPreview
+                  script={roteiro?.narracao_texto || ''}
+                  title={wiz.brief.produto || 'Vídeo'}
+                />
+              </div>
+            )}
+          </>
+          );
+        })()}
       </div>
 
       {/* Step 8: Preview áudio */}
@@ -845,7 +1114,13 @@ function WizardShell() {
       {navVisible && (
         <div className="wizard-nav">
           <button className="btn btn-ghost" onClick={goBack} hidden={stepIndex === 0}>Voltar</button>
-          <button className="btn btn-primary" onClick={goNext}>Continuar</button>
+          <button
+            className="btn btn-primary"
+            onClick={goNext}
+            disabled={key === 'preview-video' && wiz.videoStage !== 'done'}
+          >
+            {key === 'preview-video' && wiz.videoStage === 'running' ? 'Gerando…' : key === 'preview-video' && wiz.videoStage === 'assembling' ? 'Montando…' : 'Continuar'}
+          </button>
         </div>
       )}
     </>

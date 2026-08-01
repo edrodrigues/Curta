@@ -1,0 +1,119 @@
+import { NextRequest, NextResponse } from "next/server";
+import fs from "node:fs";
+import path from "node:path";
+import { getRun, MonidError, type MonidRunStatus } from "@/lib/monid/client";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+const CLIPS_DIR = path.join(process.cwd(), "public", "_clips");
+
+type RunRef = { index: number; run_id: string };
+
+function isStringRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
+
+function readRuns(v: unknown): RunRef[] {
+  if (!Array.isArray(v)) return [];
+  const out: RunRef[] = [];
+  for (const row of v) {
+    if (!isStringRecord(row)) continue;
+    const index = typeof row.index === "number" ? row.index : -1;
+    const run_id =
+      typeof row.run_id === "string" ? row.run_id : typeof row.runId === "string" ? row.runId : "";
+    if (index >= 0 && run_id) out.push({ index, run_id });
+  }
+  return out;
+}
+
+function mapStatus(s: MonidRunStatus): "pendente" | "rodando" | "concluido" | "falhou" {
+  switch (s) {
+    case "READY":
+    case "RUNNING":
+      return "rodando";
+    case "COMPLETED":
+      return "concluido";
+    case "FAILED":
+    case "BLOCKED":
+    case "TIME_OUT":
+    case "STOPPED":
+      return "falhou";
+    default:
+      return "rodando";
+  }
+}
+
+async function downloadClip(
+  run_id: string,
+  download_url: string
+): Promise<string | null> {
+  await fs.promises.mkdir(CLIPS_DIR, { recursive: true }).catch(() => {});
+  const targetPath = path.join(CLIPS_DIR, `${run_id}.mp4`);
+  try {
+    const res = await fetch(download_url, { cache: "no-store" });
+    if (!res.ok || !res.body) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length === 0) return null;
+    await fs.promises.writeFile(targetPath, buf);
+    return `/_clips/${run_id}.mp4`;
+  } catch {
+    return null;
+  }
+}
+
+export async function POST(req: NextRequest) {
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json(
+      { ok: false, message: "Corpo da requisição inválido." },
+      { status: 400 }
+    );
+  }
+  const data = (body ?? {}) as { runs?: unknown };
+  const runs = readRuns(data.runs);
+  if (runs.length === 0) {
+    return NextResponse.json(
+      { ok: false, message: "Nenhum run_id fornecido para consulta." },
+      { status: 400 }
+    );
+  }
+
+  const jobs = await Promise.all(
+    runs.map(async (r) => {
+      try {
+        const res = await getRun(r.run_id);
+        const status = mapStatus(res.status);
+        let clip_url: string | undefined = undefined;
+        if (status === "concluido" && res.download_url) {
+          const saved = await downloadClip(r.run_id, res.download_url);
+          if (saved) clip_url = saved;
+          else {
+            return {
+              index: r.index,
+              run_id: r.run_id,
+              status: "falhou" as const,
+              error: "Não foi possível baixar o clipe gerado.",
+            };
+          }
+        }
+        return { index: r.index, run_id: r.run_id, status, clip_url };
+      } catch (e) {
+        const err =
+          e instanceof MonidError
+            ? e
+            : new MonidError((e as Error).message, "unknown");
+        return {
+          index: r.index,
+          run_id: r.run_id,
+          status: "falhou" as const,
+          error: err.message,
+        };
+      }
+    })
+  );
+
+  return NextResponse.json({ ok: true, jobs });
+}

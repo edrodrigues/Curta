@@ -1,7 +1,7 @@
 import "server-only";
 import { generateText } from "ai";
 import { getScriptModel } from "./client";
-import type { Brief, RoteiroOutput, RoteiroVoz } from "@/lib/types";
+import type { Brief, Cena, RoteiroOutput, RoteiroVoz } from "@/lib/types";
 
 export class GenerateRoteiroError extends Error {
   constructor(
@@ -60,6 +60,26 @@ Gere o texto completo da narração, já formatado para colar diretamente no Ele
 - Não inclua indicações de cena, tempo ou direção de câmera nesse bloco — apenas o que deve ser dito, em texto puro.
 - Ao final, inclua uma linha separada com sugestão de configuração de voz: estilo (ex: conversacional, calmo, energético), estabilidade e exaggeration recomendados em termos gerais (ex: "estabilidade média-baixa para soar mais espontâneo").
 
+### PARTE 3 — PROMPTS DE CENA (MINIMAX)
+
+Logo após a PARTE 2, emita uma lista JSON delimitada por \`\`\`cenas e \`\`\`, com um objeto por linha da tabela da PARTE 1 (na mesma ordem), seguindo EXATAMENTE este schema:
+
+\`\`\`cenas
+[
+  { "idx": 1, "tempo": "0:00–0:06", "duration": 6, "video_pt": "...", "audio_pt": "...", "prompt": "..." },
+  ...
+]
+\`\`\`
+
+Regras:
+- "idx": sequencial a partir de 1, na mesma ordem das linhas da tabela.
+- "tempo": copie idêntico da coluna TEMPO da tabela.
+- "duration": 6 se a janela de tempo da cena for ≤ 6s; 10 se for > 6s (cenas do MiniMax Hailuo-2.3 em 768P só permitem 6 ou 10 segundos).
+- "video_pt": copie idêntico o texto da coluna VÍDEO dessa linha.
+- "audio_pt": copie idêntico o texto da coluna ÁUDIO/NARRAÇÃO dessa linha.
+- "prompt": descrição cinematográfica em INGLÊS, ≤ 2000 caracteres, pronta para o MiniMax Hailuo-2.3. Incorpore direção visual da coluna VÍDEO traduzida e expandida (estilo, paleta, movimento). Use preferencialmente a sintaxe de câmera entre colchetes suportada pelo modelo quando fizer sentido: [Push in], [Pull back], [Pan left], [Pan right], [Truck left], [Truck right], [Zoom in], [Zoom out], [Tilt up], [Tilt down]. Não inclua legendas, tipografia, narração nem texto narrado dentro do prompt — apenas a cena visual. Mantenha ~1–3 sentenças.
+- Não adicione comentários fora ou dentro do bloco JSON. Não adicione vírgulas finais.
+
 ## RESTRIÇÕES
 
 - Nunca ultrapasse a contagem de palavras compatível com a duração total informada.
@@ -82,8 +102,8 @@ function fill(template: string, brief: Brief, duracao: number): string {
 
 const SYSTEM_PROMPT = [
   "Você é um roteirista sênior de vídeos animados curtos.",
-  "Siga EXATAMENTE o FORMATO DE SAÍDA fornecido, com as duas partes demarcadas pelos títulos '### PARTE 1 — ROTEIRO EM TABELA' e '### PARTE 2 — TEXTO DE NARRAÇÃO PARA ELEVENLABS'.",
-  "Não adicione comentários, explicações ou texto fora dessas duas partes.",
+  "Siga EXATAMENTE o FORMATO DE SAÍDA fornecido, com as três partes demarcadas pelos títulos '### PARTE 1 — ROTEIRO EM TABELA', '### PARTE 2 — TEXTO DE NARRAÇÃO PARA ELEVENLABS' e '### PARTE 3 — PROMPTS DE CENA (MINIMAX)'.",
+  "Não adicione comentários, explicações ou texto fora dessas três partes.",
   "Se algum input estiver ambíguo, coloque um único parágrafo curto de AVISO antes de '### PARTE 1' explicando o que assumiu.",
 ].join(" ");
 
@@ -206,6 +226,93 @@ function extractMoodFromTabela(tabela: string): string {
   return "";
 }
 
+function clampPrompt(s: string, max = 2000): string {
+  const t = (s || "").trim();
+  return t.length > max ? t.slice(0, max) : t;
+}
+
+function parseCenasFromPart3(part3Body: string): Cena[] {
+  const fenceMatch = part3Body.match(/```cenas\s*([\s\S]*?)```/i);
+  let jsonText: string | null = null;
+  if (fenceMatch) {
+    jsonText = fenceMatch[1].trim();
+  } else {
+    const arrStart = part3Body.indexOf("[");
+    const arrEnd = part3Body.lastIndexOf("]");
+    if (arrStart !== -1 && arrEnd !== -1 && arrEnd > arrStart) {
+      jsonText = part3Body.slice(arrStart, arrEnd + 1).trim();
+    }
+  }
+  if (!jsonText) return [];
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonText);
+  } catch {
+    const cleaned = jsonText
+      .replace(/,\s*]/g, "]")
+      .replace(/,\s*}/g, "}");
+    try {
+      parsed = JSON.parse(cleaned);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(parsed)) return [];
+
+  const cenas: Cena[] = [];
+  parsed.forEach((row, i) => {
+    if (!row || typeof row !== "object") return;
+    const o = row as Record<string, unknown>;
+    const idx = typeof o.idx === "number" ? o.idx : i + 1;
+    const tempo = typeof o.tempo === "string" ? o.tempo : "";
+    const video_pt = typeof o.video_pt === "string" ? o.video_pt : "";
+    const audio_pt = typeof o.audio_pt === "string" ? o.audio_pt : "";
+    const prompt_en = clampPrompt(typeof o.prompt === "string" ? o.prompt : "");
+    const rawDur = typeof o.duration === "number" ? o.duration : 6;
+    const duration_hint: 6 | 10 = rawDur === 10 ? 10 : 6;
+    if (!video_pt && !audio_pt && !prompt_en) return;
+    cenas.push({ index: idx - 1, tempo, video_pt, audio_pt, prompt_en, duration_hint });
+  });
+  return cenas;
+}
+
+function parseDurationFromTempo(tempo: string): number {
+  const m = tempo.match(/\d{1,2}:\d{2}\s*[–-]\s*(\d{1,2}):(\d{2})/);
+  if (!m) return 6;
+  const endSec = parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+  const startMatch = tempo.match(/(\d{1,2}):(\d{2})\s*[–-]/);
+  const startSec = startMatch ? parseInt(startMatch[1], 10) * 60 + parseInt(startMatch[2], 10) : 0;
+  const span = endSec - startSec;
+  if (!Number.isFinite(span) || span <= 0) return 6;
+  return span > 6 ? 10 : 6;
+}
+
+function deriveCenasFromTabela(tabela_md: string): Cena[] {
+  const rows = tabela_md
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => /^\|.*\|\s*$/.test(l));
+  if (rows.length < 3) return [];
+  const body = rows.slice(2);
+  const cenas: Cena[] = [];
+  body.forEach((r, i) => {
+    const cells = r.replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+    if (cells.length < 3) return;
+    const [tempo, video_pt, audio_pt] = cells;
+    const duration_hint = parseDurationFromTempo(tempo) as 6 | 10;
+    cenas.push({
+      index: i,
+      tempo,
+      video_pt,
+      audio_pt: audio_pt || "",
+      prompt_en: clampPrompt(video_pt),
+      duration_hint,
+    });
+  });
+  return cenas;
+}
+
 export function parseRoteiroOutput(raw: string): RoteiroOutput {
   const aviso = buildAviso(raw);
 
@@ -213,12 +320,18 @@ export function parseRoteiroOutput(raw: string): RoteiroOutput {
   const part1AndRest = split1.length > 1 ? split1.slice(1).join("### PARTE 1") : raw;
   const split2 = part1AndRest.split(/###\s*PARTE\s*2/i);
   const part1Body = split2[0] || "";
-  const part2Body = split2.length > 1 ? split2.slice(1).join("### PARTE 2") : "";
+  const part2AndRest = split2.length > 1 ? split2.slice(1).join("### PARTE 2") : "";
+  const split3 = part2AndRest.split(/###\s*PARTE\s*3/i);
+  const part2Body = split3[0] || "";
+  const part3Body = split3.length > 1 ? split3.slice(1).join("### PARTE 3") : "";
 
   const tabela_md = extractTabela(part1Body);
   const { voz, narration } = parseVoiceConfig(part2Body);
   const trilha_mood = extractMoodFromTabela(tabela_md) || "ambiente calmo";
   const narracao_texto = narration.replace(/^[\s\n]*--+[\s\n]*/, "").trim();
+
+  let cenas = parseCenasFromPart3(part3Body);
+  if (cenas.length === 0) cenas = deriveCenasFromTabela(tabela_md);
 
   return {
     tabela_md,
@@ -226,6 +339,7 @@ export function parseRoteiroOutput(raw: string): RoteiroOutput {
     voz,
     trilha_mood,
     aviso,
+    cenas,
   };
 }
 

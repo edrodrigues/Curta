@@ -89,6 +89,7 @@ export type Project = {
   trilhaNome: string;
   status: ProjectStatus;
   createdAt: string;
+  videoUrl?: string;
 };
 
 export type User = { nome: string; email: string } | null;
@@ -118,13 +119,33 @@ export type RoteiroVoz = {
   raw: string;
 };
 
+export type Cena = {
+  index: number;
+  tempo: string;
+  video_pt: string;
+  audio_pt: string;
+  prompt_en: string;
+  duration_hint: 6 | 10;
+};
+
 export type RoteiroOutput = {
   tabela_md: string;
   narracao_texto: string;
   voz: RoteiroVoz;
   trilha_mood: string;
   aviso?: string;
+  cenas: Cena[];
 };
+
+export type SceneRenderStatus = 'pendente' | 'rodando' | 'concluido' | 'falhou';
+export type SceneRender = {
+  index: number;
+  status: SceneRenderStatus;
+  run_id?: string;
+  clip_url?: string;
+  error?: string;
+};
+export type VideoStage = 'idle' | 'running' | 'assembling' | 'done' | 'error';
 
 export type WizardData = {
   link: string;
@@ -132,6 +153,10 @@ export type WizardData = {
   videoFormat: VideoFormatKey | null;
   brief: Brief;
   roteiro: RoteiroOutput | null;
+  sceneRenders: SceneRender[];
+  finalVideoUrl: string | null;
+  videoStage: VideoStage;
+  videoCostEstimateUsd: number | null;
 };
 
 export const emptyBrief: Brief = {
