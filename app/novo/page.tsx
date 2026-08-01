@@ -260,6 +260,8 @@ function WizardShell() {
   const ensureDraftRef = useRef(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const videoStartedAtRef = useRef<number | null>(null);
+  const serverUpdatedAtRef = useRef<string | null>(null);
+  const skipAutosaveRef = useRef(false);
   const [etaSeconds, setEtaSeconds] = useState<number | null>(null);
   const etaAnchorRef = useRef<{ at: number; value: number } | null>(null);
   const lastEtaKeyRef = useRef('');
@@ -268,6 +270,7 @@ function WizardShell() {
     if (!projectIdParam) { setLoadingProject(false); return; }
     let cancelled = false;
     (async () => {
+      skipAutosaveRef.current = true;
       const result = await loadProject(projectIdParam);
       if (cancelled) return;
       if (!result) {
@@ -275,7 +278,7 @@ function WizardShell() {
         router.replace('/projetos');
         return;
       }
-      const { project, wizard, stepIndex: savedStep } = result;
+      const { project, wizard, stepIndex: savedStep, updated_at } = result;
       let nextWiz = wizard;
       if (wizard.finalVideoKey) {
         try {
@@ -286,18 +289,24 @@ function WizardShell() {
           });
           const signData = await signRes.json();
           if (!cancelled && signRes.ok && signData?.ok && signData.url) {
-            nextWiz = { ...wizard, finalVideoUrl: signData.url };
+            nextWiz = {
+              ...wizard,
+              finalVideoUrl: signData.url,
+              videoStage: wizard.videoStage === 'error' ? 'done' : wizard.videoStage,
+            };
           }
         } catch {
           /* keep stored url if refresh fails */
         }
       }
       if (cancelled) return;
+      serverUpdatedAtRef.current = updated_at;
       setWiz(nextWiz);
       setStepIndex(savedStep);
       setDbProjectId(projectIdParam);
       setLastProject(project);
       setLoadingProject(false);
+      window.setTimeout(() => { skipAutosaveRef.current = false; }, 500);
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -319,13 +328,14 @@ function WizardShell() {
   async function ensureDraft() {
     if (dbProjectId || ensureDraftRef.current || !user) return;
     ensureDraftRef.current = true;
-    const id = await createProject(user.id, {
+    const created = await createProject(user.id, {
       wizard: wiz,
       stepIndex,
       extras: buildExtras(),
     });
-    if (id) {
-      setDbProjectId(id);
+    if (created) {
+      setDbProjectId(created.id);
+      serverUpdatedAtRef.current = created.updated_at;
     } else {
       toast('Não foi possível criar o rascunho.');
       ensureDraftRef.current = false;
@@ -333,20 +343,52 @@ function WizardShell() {
   }
 
   useEffect(() => {
-    if (!dbProjectId) return;
+    if (!dbProjectId || loadingProject || skipAutosaveRef.current) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(async () => {
-      await updateProject(dbProjectId, {
-        wizard: wiz,
-        stepIndex,
-        extras: buildExtras(),
-      }).catch(() => {
-        /* transient save failures are non-fatal */
-      });
+      if (skipAutosaveRef.current) return;
+      const expected = serverUpdatedAtRef.current;
+      const result = await updateProject(
+        dbProjectId,
+        { wizard: wiz, stepIndex, extras: buildExtras() },
+        { expectedUpdatedAt: expected }
+      );
+      if (result.ok) {
+        serverUpdatedAtRef.current = result.updated_at;
+      } else if (result.reason === 'stale') {
+        const fresh = await loadProject(dbProjectId);
+        if (fresh) {
+          serverUpdatedAtRef.current = fresh.updated_at;
+          skipAutosaveRef.current = true;
+          let nextWiz = fresh.wizard;
+          if (fresh.wizard.finalVideoKey) {
+            try {
+              const signRes = await fetch('/api/video/sign', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key: fresh.wizard.finalVideoKey }),
+              });
+              const signData = await signRes.json();
+              if (signRes.ok && signData?.ok && signData.url) {
+                nextWiz = {
+                  ...fresh.wizard,
+                  finalVideoUrl: signData.url,
+                  videoStage: fresh.wizard.videoStage === 'error' ? 'done' : fresh.wizard.videoStage,
+                };
+              }
+            } catch { /* keep */ }
+          }
+          setWiz(nextWiz);
+          setStepIndex(fresh.stepIndex);
+          setLastProject(fresh.project);
+          window.setTimeout(() => { skipAutosaveRef.current = false; }, 500);
+          toast('Projeto atualizado em outra aba — estado recarregado.');
+        }
+      }
     }, 1500);
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wiz, stepIndex, dbProjectId]);
+  }, [wiz, stepIndex, dbProjectId, loadingProject]);
 
   const key = WIZ_STEPS[stepIndex].key;
 
@@ -421,21 +463,64 @@ function WizardShell() {
 
     const hasDone = wiz.videoStage === 'done' && (!!wiz.finalVideoUrl || !!wiz.finalVideoKey);
     const stageActive = wiz.videoStage === 'running' || wiz.videoStage === 'assembling';
-    const hasUsableRenders =
-      wiz.sceneRenders.length > 0 &&
-      wiz.sceneRenders.some(
-        (s) =>
-          (s.status === 'concluido' && !!s.clip_url) ||
-          ((s.status === 'pendente' || s.status === 'rodando') && !!s.run_id)
-      );
-    if (hasDone || stageActive || hasUsableRenders) {
+    const hasAnyRenders = wiz.sceneRenders.length > 0;
+    if (hasDone || stageActive || hasAnyRenders) {
       goToStep(stepIndex + 1);
       return;
     }
 
-    if (videoRunningRef.current) return;
-    videoRunningRef.current = true;
+    await startVideoGeneration();
+  }
 
+  async function restoreFinalVideo() {
+    const key = wiz.finalVideoKey;
+    if (!key) {
+      toast('Nenhum vídeo final salvo para restaurar.');
+      return;
+    }
+    try {
+      const signRes = await fetch('/api/video/sign', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key }),
+      });
+      const signData = await signRes.json();
+      if (!signRes.ok || !signData?.ok || !signData.url) {
+        toast(signData?.message || 'Não foi possível restaurar o vídeo.');
+        return;
+      }
+      setWiz((w) => ({
+        ...w,
+        finalVideoUrl: signData.url,
+        videoStage: 'done',
+      }));
+      toast('Vídeo final restaurado.');
+    } catch {
+      toast('Falha de conexão ao restaurar o vídeo.');
+    }
+  }
+
+  async function startVideoGeneration(opts?: { force?: boolean }) {
+    const roteiro = wiz.roteiro;
+    if (!roteiro || !roteiro.cenas || roteiro.cenas.length === 0) {
+      toast('Roteiro sem cenas para gerar o vídeo.');
+      return;
+    }
+    if (videoRunningRef.current) return;
+
+    if (opts?.force) {
+      const errs = wiz.sceneRenders.map((s) => s.error || '').join(' ');
+      if (/BLOCKED/i.test(errs)) {
+        const ok = typeof window !== 'undefined'
+          ? window.confirm(
+              'A Monid bloqueou a geração anterior (limite/política). Reenviar pode falhar de novo e consumir créditos. Continuar mesmo assim?'
+            )
+          : true;
+        if (!ok) return;
+      }
+    }
+
+    videoRunningRef.current = true;
     const token = 'f' + Date.now().toString(16) + Math.random().toString(16).slice(2);
     videoTokenRef.current = token;
 
@@ -444,12 +529,19 @@ function WizardShell() {
       status: 'pendente',
     }));
     assemblingRef.current = false;
-    setWiz((w) => ({ ...w, sceneRenders: seed, finalVideoUrl: null, finalVideoKey: null, videoStage: 'running', videoCostEstimateUsd: null }));
+    setWiz((w) => ({
+      ...w,
+      sceneRenders: seed,
+      finalVideoUrl: null,
+      videoStage: 'running',
+      videoCostEstimateUsd: null,
+    }));
     videoStartedAtRef.current = Date.now();
     etaAnchorRef.current = null;
     lastEtaKeyRef.current = '';
 
-    goToStep(stepIndex + 1);
+    const previewIdx = WIZ_STEPS.findIndex((s) => s.key === 'preview-video');
+    if (key !== 'preview-video') goToStep(previewIdx >= 0 ? previewIdx : stepIndex + 1);
 
     try {
       const res = await fetch('/api/video/runs', {
@@ -488,9 +580,11 @@ function WizardShell() {
         const errs = jobs.map((j) => j.error || '').join(' ');
         const hint = /MONID_API_KEY/.test(errs)
           ? 'Chave da Monid ausente. Configure MONID_API_KEY.'
-          : /Limite de requisições|429/.test(errs)
-            ? 'Limite de requisições da Monid atingido. Aguarde e tente novamente.'
-            : 'Todos os clipes falharam ao iniciar.';
+          : /BLOCKED/i.test(errs)
+            ? 'A Monid bloqueou a geração (limite/política). Não reenvie em loop.'
+            : /Limite de requisições|429/.test(errs)
+              ? 'Limite de requisições da Monid atingido. Aguarde e tente novamente.'
+              : 'Todos os clipes falharam ao iniciar.';
         toast(hint);
         setWiz((w) => ({ ...w, videoStage: 'error' }));
         videoRunningRef.current = false;
@@ -692,9 +786,11 @@ function WizardShell() {
       const errs = wiz.sceneRenders.map((s) => s.error || '').join(' ');
       const hint = /MONID_API_KEY/.test(errs)
         ? 'Chave da Monid ausente. Configure MONID_API_KEY.'
-        : /Limite de requisições|429/.test(errs)
-          ? 'Limite de requisições da Monid atingido. Aguarde e tente novamente.'
-          : 'Todos os clipes falharam na geração.';
+        : /BLOCKED/i.test(errs)
+          ? 'A Monid bloqueou a geração (limite/política). Não reenvie em loop.'
+          : /Limite de requisições|429/.test(errs)
+            ? 'Limite de requisições da Monid atingido. Aguarde e tente novamente.'
+            : 'Todos os clipes falharam na geração.';
       setWiz((w) => ({ ...w, videoStage: 'error' }));
       videoRunningRef.current = false;
       toast(hint);
@@ -1277,7 +1373,34 @@ function WizardShell() {
             {failed > 0 && total > 0 && failed === total && (
               <div className="roteiro-aviso" style={{ marginTop: '1.25rem' }}>
                 <p className="eyebrow">Erro</p>
-                <p>Todas as cenas falharam na geração. Veja as mensagens de erro de cada cena acima para o motivo (créditos da Monid, credenciais do Supabase, etc.) e tente novamente.</p>
+                <p>
+                  {/BLOCKED/i.test(renders.map((r) => r.error || '').join(' '))
+                    ? 'A Monid bloqueou esta geração (limite/política). Não reenvie em loop — se já houver um vídeo montado, restaure-o.'
+                    : 'Todas as cenas falharam na geração. Veja as mensagens de erro de cada cena acima para o motivo e use os botões abaixo.'}
+                </p>
+                <div className="roteiro-actions" style={{ marginTop: '1rem' }}>
+                  {wiz.finalVideoKey && (
+                    <button className="btn btn-primary" type="button" onClick={() => void restoreFinalVideo()}>
+                      Restaurar vídeo já gerado
+                    </button>
+                  )}
+                  <button
+                    className="btn btn-ghost"
+                    type="button"
+                    onClick={() => void startVideoGeneration({ force: true })}
+                    disabled={videoActive}
+                  >
+                    Tentar novamente
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {wiz.videoStage === 'error' && wiz.finalVideoKey && failed < total && (
+              <div className="roteiro-actions" style={{ marginTop: '1rem' }}>
+                <button className="btn btn-primary" type="button" onClick={() => void restoreFinalVideo()}>
+                  Restaurar vídeo já gerado
+                </button>
               </div>
             )}
 

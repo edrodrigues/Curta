@@ -100,17 +100,17 @@ export async function listProjects(): Promise<Project[]> {
   return (data ?? []).map(rowToProject);
 }
 
-export async function loadProject(id: string): Promise<{ project: Project; wizard: WizardData; stepIndex: number } | null> {
+export async function loadProject(id: string): Promise<{ project: Project; wizard: WizardData; stepIndex: number; updated_at: string } | null> {
   const supabase = createSupabaseBrowser();
   const { data, error } = await supabase.from('projects').select('*').eq('id', id).single();
   if (error || !data) return null;
   const project = rowToProject(data);
   const ws = (data.wizard_state as WizardState | null) ?? null;
   const { wizard, stepIndex } = wizardFromState(ws, data);
-  return { project, wizard, stepIndex };
+  return { project, wizard, stepIndex, updated_at: data.updated_at };
 }
 
-export async function createProject(user_id: string, input: { wizard: WizardData; stepIndex: number; extras: ProjectExtras }): Promise<string | null> {
+export async function createProject(user_id: string, input: { wizard: WizardData; stepIndex: number; extras: ProjectExtras }): Promise<{ id: string; updated_at: string } | null> {
   const supabase = createSupabaseBrowser();
   const insert: ProjectsInsert = {
     user_id,
@@ -124,13 +124,43 @@ export async function createProject(user_id: string, input: { wizard: WizardData
     status: 'rascunho',
     wizard_state: serializeWizard(input.wizard, input.stepIndex, input.extras),
   };
-  const { data, error } = await supabase.from('projects').insert(insert).select('id').single();
+  const { data, error } = await supabase.from('projects').insert(insert).select('id, updated_at').single();
   if (error || !data) return null;
-  return data.id;
+  return { id: data.id, updated_at: data.updated_at };
 }
 
-export async function updateProject(id: string, input: { wizard: WizardData; stepIndex: number; extras: ProjectExtras }): Promise<void> {
+export type UpdateProjectResult =
+  | { ok: true; updated_at: string }
+  | { ok: false; reason: 'stale' | 'error'; message?: string };
+
+export async function updateProject(
+  id: string,
+  input: { wizard: WizardData; stepIndex: number; extras: ProjectExtras },
+  opts?: { expectedUpdatedAt?: string | null }
+): Promise<UpdateProjectResult> {
   const supabase = createSupabaseBrowser();
+
+  if (opts?.expectedUpdatedAt) {
+    const { data: current } = await supabase
+      .from('projects')
+      .select('wizard_state, updated_at')
+      .eq('id', id)
+      .single();
+    if (current && current.updated_at !== opts.expectedUpdatedAt) {
+      return { ok: false, reason: 'stale' };
+    }
+    const serverWs = (current?.wizard_state as WizardState | null) ?? null;
+    const client = input.wizard;
+    if (
+      serverWs?.videoStage === 'done' &&
+      serverWs.finalVideoKey &&
+      client.videoStage === 'error' &&
+      !client.finalVideoKey
+    ) {
+      return { ok: false, reason: 'stale', message: 'Servidor tem vídeo pronto; save local descartado.' };
+    }
+  }
+
   const update: ProjectsUpdate = {
     titulo: (input.extras.titulo || input.wizard.brief.produto) || null,
     link_origem: input.wizard.link || null,
@@ -141,8 +171,15 @@ export async function updateProject(id: string, input: { wizard: WizardData; ste
     video_format: input.wizard.videoFormat ?? null,
     wizard_state: serializeWizard(input.wizard, input.stepIndex, input.extras),
   };
-  const { error } = await supabase.from('projects').update(update).eq('id', id);
-  if (error) throw error;
+
+  let q = supabase.from('projects').update(update).eq('id', id);
+  if (opts?.expectedUpdatedAt) {
+    q = q.eq('updated_at', opts.expectedUpdatedAt);
+  }
+  const { data, error } = await q.select('updated_at').maybeSingle();
+  if (error) return { ok: false, reason: 'error', message: error.message };
+  if (!data) return { ok: false, reason: 'stale' };
+  return { ok: true, updated_at: data.updated_at };
 }
 
 export async function updateProjectStatus(id: string, status: ProjectStatus, extra?: { video_url?: string; credits_charged?: number }): Promise<void> {
