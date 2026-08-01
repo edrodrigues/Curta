@@ -134,6 +134,9 @@ export type GetRunResult = {
   download_url?: string;
   error?: string;
   stoppable?: boolean;
+  input?: unknown;
+  output?: unknown;
+  resource_ids?: string[];
 };
 
 function extractDownloadUrl(data: unknown): string | undefined {
@@ -198,7 +201,38 @@ export async function getRun(run_id: string): Promise<GetRunResult> {
     typeof data === "object" && data && "error" in data && typeof data.error === "object" && data.error
       ? String((data.error as Record<string, unknown>).message ?? "")
       : undefined;
-  return { run_id, status, download_url, stoppable, error };
+  const input =
+    typeof data === "object" && data && "input" in data ? data.input : undefined;
+  const output =
+    typeof data === "object" && data && "output" in data ? data.output : undefined;
+  const resource_ids = Array.isArray(data)
+    ? undefined
+    : (() => {
+        const resources =
+          typeof data === "object" && data && Array.isArray((data as { resources?: unknown }).resources)
+            ? (data as { resources: Array<{ resourceId?: unknown }> }).resources
+            : [];
+        const ids: string[] = [];
+        for (const r of resources) {
+          if (typeof r?.resourceId === "string" && r.resourceId) ids.push(r.resourceId);
+        }
+        return ids.length > 0 ? ids : undefined;
+      })();
+  return { run_id, status, download_url, stoppable, error, input, output, resource_ids };
+}
+
+export async function releaseRunResources(resource_ids: string[]): Promise<void> {
+  for (const id of resource_ids) {
+    try {
+      await fetch(`${MONID_BASE}/resources/${encodeURIComponent(id)}/release`, {
+        method: "POST",
+        headers: authHeaders(),
+        cache: "no-store",
+      });
+    } catch {
+      /* best-effort; resource cleanup não deve quebrar o fluxo */
+    }
+  }
 }
 
 export type NarrationModel =

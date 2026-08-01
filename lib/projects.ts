@@ -74,9 +74,9 @@ export function wizardFromState(ws: WizardState | null, row: ProjectsRow): { wiz
     finalVideoKey: ws?.finalVideoKey ?? null,
     videoStage: ws?.videoStage ?? 'idle',
     videoCostEstimateUsd: ws?.videoCostEstimateUsd ?? null,
-    narrationStage: ws?.narrationStage ?? 'idle',
+    narrationStage: ws?.narrationStage ?? (row.audio_url ? 'done' : 'idle'),
     narrationRunId: ws?.narrationRunId ?? null,
-    narrationKey: ws?.narrationKey ?? null,
+    narrationKey: ws?.narrationKey ?? row.audio_url ?? null,
     narrationUrl: ws?.narrationUrl ?? null,
     narrationError: ws?.narrationError ?? null,
   };

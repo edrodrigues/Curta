@@ -776,22 +776,17 @@ function WizardShell() {
       });
       const data = await res.json();
       if (!res.ok || !data.ok) {
-        const msg = data?.message || 'Falha ao gerar a narração.';
+        const msg = data?.message || 'Falha ao iniciar a narração.';
         setWiz((w) => ({ ...w, narrationStage: 'error', narrationError: msg }));
         toast(msg);
         return;
       }
       setWiz((w) => ({
         ...w,
-        narrationStage: 'done',
         narrationRunId: typeof data.run_id === 'string' ? data.run_id : null,
-        narrationKey: typeof data.narration_key === 'string' ? data.narration_key : null,
-        narrationUrl: typeof data.narration_url === 'string' ? data.narration_url : null,
-        narrationError: null,
       }));
-      toast('Narração gerada.');
     } catch {
-      const msg = 'Falha de conexão ao gerar a narração.';
+      const msg = 'Falha de conexão ao iniciar a narração.';
       setWiz((w) => ({ ...w, narrationStage: 'error', narrationError: msg }));
       toast(msg);
     } finally {
@@ -818,9 +813,56 @@ function WizardShell() {
     if (wiz.narrationStage === 'idle' && !!wiz.roteiro?.narracao_texto) {
       narrationAutoRef.current = true;
       void generateNarration();
+    } else if (wiz.narrationStage === 'generating' && !wiz.narrationRunId) {
+      narrationAutoRef.current = true;
+      void generateNarration();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, wiz.narrationStage, wiz.roteiro]);
+
+  useEffect(() => {
+    if (key !== 'preview-audio') return;
+    if (wiz.narrationStage !== 'generating' || !wiz.narrationRunId) return;
+    let cancelled = false;
+    const tick = async () => {
+      if (cancelled) return;
+      try {
+        const res = await fetch(`/api/audio/narrate?run_id=${encodeURIComponent(wiz.narrationRunId!)}`);
+        const data = await res.json();
+        if (cancelled) return;
+        if (res.ok && data?.ok) {
+          if (data.status === 'COMPLETED') {
+            setWiz((w) => ({
+              ...w,
+              narrationStage: 'done',
+              narrationRunId: w.narrationRunId,
+              narrationKey: typeof data.narration_key === 'string' ? data.narration_key : null,
+              narrationUrl: typeof data.narration_url === 'string' ? data.narration_url : null,
+              narrationError: null,
+            }));
+            toast('Narração gerada.');
+          } else if (['FAILED', 'BLOCKED', 'TIME_OUT', 'STOPPED'].includes(data.status)) {
+            const msg = data?.message || 'Falha ao gerar a narração.';
+            setWiz((w) => ({ ...w, narrationStage: 'error', narrationError: msg }));
+            toast(msg);
+          }
+        } else {
+          const msg = data?.message || 'Falha ao consultar a narração.';
+          setWiz((w) => ({ ...w, narrationStage: 'error', narrationError: msg }));
+          toast(msg);
+        }
+      } catch {
+        /* transient; retry on next tick */
+      }
+    };
+    void tick();
+    const id = window.setInterval(tick, 4000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, wiz.narrationStage, wiz.narrationRunId]);
 
   useEffect(() => {
     if (key === 'gerando' && !generating && stage !== 'done' && stage !== 'running') {
