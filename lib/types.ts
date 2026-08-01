@@ -4,6 +4,7 @@ export type Project = {
   id: string;
   titulo: string;
   roteiro: string;
+  tabela_md?: string;
   duracao: 30 | 60;
   estiloId: string;
   estiloNome: string;
@@ -21,13 +22,48 @@ export type StoreState = {
   projects: Project[];
 };
 
+export type Brief = {
+  produto: string;
+  publico_alvo: string;
+  objetivo: string;
+  tom: string;
+  idioma: string;
+  cta: string;
+  estilo_visual: string;
+  referencias: string;
+};
+
+export type RoteiroVoz = {
+  estilo: string;
+  estabilidade: string;
+  exaggeration: string;
+  raw: string;
+};
+
+export type RoteiroOutput = {
+  tabela_md: string;
+  narracao_texto: string;
+  voz: RoteiroVoz;
+  trilha_mood: string;
+  aviso?: string;
+};
+
 export type WizardData = {
   link: string;
   duration: 30 | 60 | null;
-  titulo: string;
-  roteiro: string;
-  styleId: string | null;
-  trackName: string | null;
+  brief: Brief;
+  roteiro: RoteiroOutput | null;
+};
+
+export const emptyBrief: Brief = {
+  produto: '',
+  publico_alvo: '',
+  objetivo: '',
+  tom: '',
+  idioma: 'pt-BR',
+  cta: '',
+  estilo_visual: '',
+  referencias: '',
 };
 
 export const STYLES = [
@@ -65,4 +101,30 @@ export function slugify(s: string): string {
 
 export function genId(): string {
   return 'p' + Date.now().toString(16) + Math.random().toString(16).slice(2);
+}
+
+export function matchStyle(voiceStyle: string): { id: string; nome: string } {
+  const v = (voiceStyle || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  if (/energ|entusias|dinam|upbeat|animad/.test(v)) {
+    return { id: 'entusiasmada', nome: 'Entusiasmada' };
+  }
+  if (/calm|pausad|didatic|tutorial|didatic|explicat/.test(v)) {
+    return { id: 'didatica', nome: 'Didática' };
+  }
+  if (/corporat|institucional|firm|confiavel|serio/.test(v)) {
+    return { id: 'institucional', nome: 'Institucional' };
+  }
+  if (/descontraid|leve|proxim|jovem|social|conversa/.test(v)) {
+    return { id: 'descontraida', nome: 'Descontraída' };
+  }
+  return { id: 'didatica', nome: 'Didática' };
+}
+
+export function matchTrack(mood: string): string {
+  const m = (mood || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  if (/calm|suave|tranquil|ambient|soft|delicad|sereno|leve/.test(m)) return 'Ambiente calmo';
+  if (/corporat|institucional|profission|serio|confian/.test(m)) return 'Corporativo';
+  if (/upbeat|energ|animad|vibrant|dinam|festiv|alegr|up ?tempo/.test(m)) return 'Upbeat';
+  if (/cinematogr|cinelico|epico|dramatic|impact|intens|narrativ/.test(m)) return 'Cinematográfico';
+  return TRACKS[0];
 }

@@ -1,6 +1,6 @@
 # Guia de implementação — Curta
 
-Instruções para um agente de programação agêntica (Claude Code, Cursor, Devin, etc.) construir a versão real e produtiva do **Curta**, a partir do protótipo estático já validado (`curta.html`). Este documento assume que o agente tem acesso a: uma conta Vercel, uma conta Supabase, uma conta InfinitePay, e uma conta Monid com chave de API configurada.
+Instruções para um agente de programação agêntica (Claude Code, Cursor, Devin, etc.) construir a versão real e produtiva do **Curta**, a partir da referência estática já validada (`curta.html`). Este documento assume que o agente tem acesso a: uma conta Vercel, uma conta Supabase, uma conta InfinitePay, e uma conta Monid com chave de API configurada.
 
 > **Antes de tudo, três avisos importantes** que mudam decisões técnicas abaixo — leia esta seção antes de começar a codar.
 
@@ -10,9 +10,9 @@ Instruções para um agente de programação agêntica (Claude Code, Cursor, Dev
 
 2. **Os webhooks da InfinitePay, pela documentação pública disponível hoje, não têm um mecanismo de assinatura (HMAC) documentado.** Isso significa que, sem cuidado extra, qualquer pessoa poderia enviar um POST forjado para o seu endpoint de webhook (agora uma Supabase Edge Function) simulando um pagamento aprovado e ganhar créditos de graça. A seção 8 traz mitigações (URL com token secreto, validação de valor e `order_nsu`, idempotência). **Confirme com o time da InfinitePay (parcerias@cloudwalk.io ou a documentação da integração específica de checkout) qual é o mecanismo de verificação recomendado antes de ir para produção** — isso não foi possível confirmar publicamente nesta pesquisa.
 
-3. **O protótipo usa as fontes Bahnschrift e Constantia (embutidas via data URI a partir de fontes do Windows).** Essas são fontes proprietárias da Microsoft — usá-las num produto comercial público **provavelmente viola a licença**, mesmo embutidas. Para produção, troque por fontes com licença aberta e visual equivalente (sugestões na seção 12) ou adquira licença comercial explícita antes do lançamento.
+3. **A referência estática usa as fontes Bahnschrift e Constantia (embutidas via data URI a partir de fontes do Windows).** Essas são fontes proprietárias da Microsoft — usá-las num produto comercial público **provavelmente viola a licença**, mesmo embutidas. Para produção, troque por fontes com licença aberta e visual equivalente (sugestões na seção 12) ou adquira licença comercial explícita antes do lançamento.
 
-4. **Os vídeos são gerados como clipes de IA (cinemáticos), montados com ffmpeg — não tipografia cinética animada.** O protótipo (`curta.html`) renderiza cenas com tipografia em canvas, mas o produto real usa a Monid para gerar clipes de vídeo via **MiniMax Hailuo-2.3** (texto-para-vídeo). O roteiro é dividido em cenas (sentenças); cada cena vira um clipe de 6s ou 10s. Os clipes são concatenados com ffmpeg, e a narração (ElevenLabs) + trilha sonora (ElevenLabs Music) são muxeadas sobre o resultado. Não há Remotion neste produto — todo o audiovisual vem da Monid. Isso muda a identidade visual final (clipes de IA em vez de tipografia animada); a identidade de marca (paleta, tipografia da UI, cópias) continua valendo para o app web, não para o vídeo final.
+4. **Os vídeos são gerados como clipes de IA (cinemáticos), montados com ffmpeg — não tipografia cinética animada.** A referência estática (`curta.html`) renderiza cenas com tipografia em canvas, mas o produto real usa a Monid para gerar clipes de vídeo via **MiniMax Hailuo-2.3** (texto-para-vídeo). O roteiro é dividido em cenas (sentenças); cada cena vira um clipe de 6s ou 10s. Os clipes são concatenados com ffmpeg, e a narração (ElevenLabs) + trilha sonora (ElevenLabs Music) são muxeadas sobre o resultado. Não há Remotion neste produto — todo o audiovisual vem da Monid. Isso muda a identidade visual final (clipes de IA em vez de tipografia animada); a identidade de marca (paleta, tipografia da UI, cópias) continua valendo para o app web, não para o vídeo final.
 
 ---
 
@@ -22,7 +22,7 @@ Instruções para um agente de programação agêntica (Claude Code, Cursor, Dev
 
 Páginas: Home (deslogada) → Cadastro/Login → Home logada (painel) → Assistente de novo projeto (8 passos: Link do site → Duração → Roteiro → Estilo de narração/trilha → Prévia de vídeo → Prévia de áudio → Gerar → Exportar) → Meus projetos → Comprar créditos.
 
-O protótipo estático (`curta.html`) define a identidade visual, as cópias em português, e o fluxo completo — use-o como referência de design e UX do app web, não como base para o vídeo final (a renderização do vídeo mudou para clipes de IA via Monid; o protótipo simula tipografia em canvas porque rodava só no `localStorage`).
+O arquivo `curta.html` define a identidade visual, as cópias em português, e o fluxo completo — use-o como referência de design e UX do app web, não como base para o vídeo final (a renderização do vídeo mudou para clipes de IA via Monid; a versão atual simula tipografia em canvas porque rodava só no `localStorage`).
 
 ## 2. Stack técnica (Vercel + Supabase)
 
@@ -227,7 +227,7 @@ Crie `.env.example` com chaves vazias e commite-o (NUNCA `.env.local`). Regras:
 
 ## 5. Sistema de créditos e preços
 
-Manter exatamente a lógica do protótipo:
+Manter exatamente a lógica atual:
 
 - 1 crédito = R$ 25,00 de valor de referência.
 - Vídeo de 30s: 1 crédito (promoção; preço cheio é 2 créditos / R$ 50).
@@ -405,7 +405,7 @@ ffmpeg -i video_body.mp4 -i narracao.mp3 -i trilha.mp3 \
 
 ## 9. Estrutura de páginas e fluxo
 
-Reaproveitar 1:1 do protótipo (`curta.html`) para o app web:
+Reaproveitar 1:1 do `curta.html` para o app web:
 
 - `/` — Home deslogada (marketing, preços, como funciona)
 - `/entrar`, `/criar-conta` — **Supabase Auth** via `@supabase/ssr` (`signInWithPassword` / `signUp`)
@@ -414,14 +414,14 @@ Reaproveitar 1:1 do protótipo (`curta.html`) para o app web:
 - `/projetos` — Meus projetos
 - `/creditos` — Comprar créditos (gera o link de pagamento InfinitePay, seção 6)
 
-No passo "Link do site", a sugestão de roteiro no protótipo é simulada; na versão real, use o Vercel AI SDK para: (a) buscar o conteúdo da página (fetch + extração de texto), (b) gerar um roteiro sugerido em pt-BR com um modelo via **Cheaper Inference** (provedor OpenAI-compatible; base URL `https://api.cheaperinference.com/v1`; chave `CHEAPER_INFERENCE_API_KEY`; modelo `deepseek-v4-flash`; `generateObject` com zod schema `{ titulo, cenas[] }` e `providerOptions.openai.strictJsonSchema = true`), respeitando o limite de palavras da duração escolhida, e dividir em cenas (uma por sentença) — que vão virar prompts do MiniMax na seção 8. Implementação de referência em `lib/ai/client.ts` + `lib/ai/generate-script.ts`, exposta pela rota server `app/api/suggest/route.ts`.
+No passo "Link do site", a sugestão de roteiro na versão atual é simulada; na versão real, use o Vercel AI SDK para: (a) buscar o conteúdo da página (fetch + extração de texto), (b) gerar um roteiro sugerido em pt-BR com um modelo via **Cheaper Inference** (provedor OpenAI-compatible; base URL `https://api.cheaperinference.com/v1`; chave `CHEAPER_INFERENCE_API_KEY`; modelo `deepseek-v4-flash`; `generateObject` com zod schema `{ titulo, cenas[] }` e `providerOptions.openai.strictJsonSchema = true`), respeitando o limite de palavras da duração escolhida, e dividir em cenas (uma por sentença) — que vão virar prompts do MiniMax na seção 8. Implementação de referência em `lib/ai/client.ts` + `lib/ai/generate-script.ts`, exposta pela rota server `app/api/suggest/route.ts`.
 
 ## 10. Identidade visual
 
-Paleta e tipografia do protótipo (reaproveitar na UI do app web):
+Paleta e tipografia de referência (reaproveitar na UI do app web):
 
 - Cores: ink `#1b1620`, paper `#ede6d9`, accent (vermelho tally-light) `#d8434c`, amber `#e4a83c`, plum `#372c42`, success `#3fa173`.
-- Tipografia: display condensado estilo sinalização (protótipo usa Bahnschrift), corpo serifado humanista (protótipo usa Constantia), utilitário monoespaçado para números/preços.
+- Tipografia: display condensado estilo sinalização (versão atual usa Bahnschrift), corpo serifado humanista (versão atual usa Constantia), utilitário monoespaçado para números/preços.
 - **Para produção, troque Bahnschrift → algo como Archivo Narrow, Big Shoulders, ou Fjalla One (Google Fonts, licença aberta), e Constantia → Source Serif 4, Lora, ou Spectral (Google Fonts).**
 
 > Nota: a identidade visual acima vale para o **app web**. O **vídeo final** (saída da Monid + ffmpeg) é cinematic AI — a tipografia/legendas não aparecem sobre os clipes por padrão. Se quiser legendas sobre os clipes, gere `.srt` (seção 8.2) e/ou queime legendas via `ffmpeg` na montagem final.

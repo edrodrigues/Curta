@@ -43,7 +43,7 @@ export default function CriarContaPage() {
           </label>
           <button className="btn btn-primary btn-block" type="submit">Criar conta</button>
         </form>
-        <p className="auth-note">Protótipo de demonstração: qualquer e-mail e senha são aceitos. Nenhum dado é enviado a um servidor.</p>
+        <p className="auth-note">Demonstração: qualquer e-mail e senha são aceitos. Nenhum dado é enviado a um servidor.</p>
       </div>
     </div>
   );

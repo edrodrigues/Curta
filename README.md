@@ -8,7 +8,7 @@ Este repositório contém o **app web Curta** (Next.js 14, App Router): a UI de 
 
 | Parte | Estado |
 |---|---|
-| UI web (home, auth, painel, novo projeto, projetos, créditos) | Protótipo funcional, estado em `localStorage` |
+| UI web (home, auth, painel, novo projeto, projetos, créditos) | Funcional, estado em `localStorage` |
 | Sugestão de roteiro a partir de um link | **Implementado** — `POST /api/suggest` |
 | Identidade visual (Fjalla One + Lora, paleta tally-light) | Pronta |
 | Auth, persistência, créditos, pagamentos, geração de vídeo | Planejados — ver `CURTA_BUILD_GUIDE.md` |
@@ -82,7 +82,7 @@ lib/
   theme.ts            Alternância de tema
   types.ts            Tipos do projeto
   RequireAuth.tsx     Guarda de rota autenticada
-curta.html            Protótipo estático original (referência de design/UX)
+curta.html            Referência de design/UX
 CURTA_BUILD_GUIDE.md  Guia de implementação da versão de produção
 .env.example          Variáveis de ambiente (sem valores)
 ```

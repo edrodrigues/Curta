@@ -2,23 +2,52 @@ import "server-only";
 import { generateObject } from "ai";
 import { z } from "zod";
 import { scriptModel } from "./client";
+import type { Brief } from "@/lib/types";
 
-export const scriptSchema = z.object({
-  titulo: z
+export const briefSchema = z.object({
+  produto: z
+    .string()
+    .min(2)
+    .max(120)
+    .describe("Nome curto do produto/marca (ex.: 'Curta', 'Nubank Pix')."),
+  publico_alvo: z
     .string()
     .min(4)
-    .max(90)
-    .describe("Título curto e convidativo do vídeo, em português do Brasil."),
-  cenas: z
-    .array(z.string().min(8).max(280))
-    .min(1)
-    .max(12)
-    .describe(
-      "Lista de cenas (uma sentença por cena), em português do Brasil, em ordem narrativa."
-    ),
+    .max(180)
+    .describe("Descrição curta do público-alvo (ex.: 'Pequenos empresários 25-45 anos')."),
+  objetivo: z
+    .string()
+    .min(3)
+    .max(80)
+    .describe("Objetivo do vídeo em poucas palavras (ex.: 'conversão', 'awareness', 'explicação de produto')."),
+  tom: z
+    .string()
+    .min(3)
+    .max(60)
+    .describe("Tom de voz (ex.: 'jovem e descontraído', 'corporativo', 'divertido')."),
+  idioma: z
+    .string()
+    .min(2)
+    .max(8)
+    .describe("Idioma da narração como código BCP-47 (ex.: 'pt-BR', 'en-US', 'es-ES')."),
+  cta: z
+    .string()
+    .min(3)
+    .max(160)
+    .describe("Chamada para ação + link/destino (ex.: 'Acesse curta.app agora')."),
+  estilo_visual: z
+    .string()
+    .min(3)
+    .max(60)
+    .describe("Estilo de animação (ex.: 'motion graphics 2D flat', 'kinetic typography')."),
+  referencias: z
+    .string()
+    .min(0)
+    .max(220)
+    .describe("Restrições/cores de marca/elementos a evitar, ou vazio se nada."),
 });
 
-export type SuggestedScript = z.infer<typeof scriptSchema>;
+export type SuggestedBrief = z.infer<typeof briefSchema>;
 
 const FETCH_TIMEOUT_MS = 10_000;
 const MAX_PAGE_CHARS = 6_000;
@@ -65,7 +94,7 @@ async function fetchPageText(url: URL): Promise<string> {
         Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.5",
       },
     });
-  } catch (e) {
+  } catch {
     clearTimeout(timer);
     throw new GenerateScriptError(
       "Não foi possível acessar o site.",
@@ -111,21 +140,19 @@ function extractVisibleText(html: string): string {
   return collapsed;
 }
 
-function buildSystemPrompt(durationSeconds: 30 | 60): string {
-  const cenasTarget = Math.round(durationSeconds / 6);
-  const wordLimit = durationSeconds === 60 ? 140 : 70;
+function buildBriefSystemPrompt(durationSeconds: 30 | 60): string {
   return [
-    "Você é um roteirista de vídeos explicativos curtos em português do Brasil (pt-BR).",
-    "A partir do conteúdo enviado, crie um roteiro de vídeo explicativo.",
-    `Duração alvo: ${durationSeconds} segundos (~${wordLimit} palavras).`,
-    `Divida em exatamente ${cenasTarget} cenas; cada cena é UMA sentença curta.`,
-    "Cada cena descreve uma ação visual concreta que possa virar um clipe de vídeo (texto-para-vídeo).",
-    "Responda SOMENTE um JSON válido no formato { titulo, cenas }.",
+    "Você é um analista de marketing. A partir do conteúdo de uma página web, extraia um BRIEF para um vídeo publicitário curto.",
+    `Duração alvo do vídeo: ${durationSeconds} segundos.`,
+    "Responda SOMENTE um JSON válido no formato definido pelo schema.",
+    "Use exatamente o que estiver visível na página. Não invente produto, marca ou CTA que não estejam no conteúdo.",
+    "Se um campo não puder ser inferido, preencha com um valor genérico curto (ex.: 'divulgado', 'público geral', 'motion graphics 2D flat').",
+    "Em 'referencias' inclua paleta de cores óbvia da marca se houver; caso contrário, deixe vazio.",
     "Sem comentários, sem markdown, sem texto fora do JSON.",
   ].join(" ");
 }
 
-function buildUserPrompt(url: URL, pageText: string): string {
+function buildBriefUserPrompt(url: URL, pageText: string): string {
   return [
     `Site de origem: ${url.hostname}`,
     `URL: ${url.toString()}`,
@@ -135,26 +162,26 @@ function buildUserPrompt(url: URL, pageText: string): string {
   ].join("\n");
 }
 
-export async function generateScript(params: {
+export async function generateBrief(params: {
   url: string;
   durationSeconds: 30 | 60;
-}): Promise<SuggestedScript> {
+}): Promise<Brief> {
   const url = toAbsoluteUrl(params.url);
   const pageText = await fetchPageText(url);
 
   try {
     const { object } = await generateObject({
       model: scriptModel,
-      schema: scriptSchema,
-      schemaName: "roteiro",
-      system: buildSystemPrompt(params.durationSeconds),
-      prompt: buildUserPrompt(url, pageText),
-      temperature: 0.7,
+      schema: briefSchema,
+      schemaName: "brief",
+      system: buildBriefSystemPrompt(params.durationSeconds),
+      prompt: buildBriefUserPrompt(url, pageText),
+      temperature: 0.4,
       providerOptions: {
         openai: { strictJsonSchema: true },
       },
     });
-    return object;
+    return { ...object };
   } catch (e: unknown) {
     const err = e as { name?: string; statusCode?: number; message?: string };
     const status = err?.statusCode;
@@ -173,7 +200,7 @@ export async function generateScript(params: {
       );
     }
     throw new GenerateScriptError(
-      err?.message ?? "Falha ao gerar roteiro.",
+      err?.message ?? "Falha ao extrair brief do link.",
       "unknown",
       status
     );

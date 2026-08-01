@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  generateScript,
+  generateBrief,
   GenerateScriptError,
 } from "@/lib/ai/generate-script";
 
@@ -41,11 +41,11 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const result = await generateScript({
+    const brief = await generateBrief({
       url: urlRaw,
       durationSeconds: durationSeconds as 30 | 60,
     });
-    return NextResponse.json({ ok: true, ...result });
+    return NextResponse.json({ ok: true, brief });
   } catch (e) {
     if (e instanceof GenerateScriptError) {
       const status =
@@ -60,7 +60,7 @@ export async function POST(req: NextRequest) {
       );
     }
     return NextResponse.json(
-      { ok: false, message: "Erro inesperado ao gerar roteiro." },
+      { ok: false, message: "Erro inesperado ao extrair brief." },
       { status: 500 }
     );
   }

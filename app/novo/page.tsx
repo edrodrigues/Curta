@@ -2,38 +2,58 @@
 
 import { useEffect, useState } from 'react';
 import { KineticPreview } from '@/components/Canvas';
-import { STYLES, TRACKS, genId, type Project, type WizardData } from '@/lib/types';
+import {
+  emptyBrief,
+  genId,
+  matchStyle,
+  matchTrack,
+  TRACKS,
+  type Brief,
+  type Project,
+  type RoteiroOutput,
+  type WizardData,
+} from '@/lib/types';
 import { useStore, useToast } from '@/lib/store';
 import { useRouter } from 'next/navigation';
 import { RequireAuth } from '@/lib/RequireAuth';
 
 const WIZ_STEPS: { key: string; label: string }[] = [
-  { key: 'link', label: 'Link' },
   { key: 'duracao', label: 'Duração' },
+  { key: 'link', label: 'Link' },
+  { key: 'brief', label: 'Brief' },
+  { key: 'gerando', label: 'Gerando' },
   { key: 'roteiro', label: 'Roteiro' },
-  { key: 'estilo', label: 'Estilo' },
   { key: 'preview-video', label: 'Vídeo' },
   { key: 'preview-audio', label: 'Áudio' },
-  { key: 'gerar', label: 'Gerar' },
   { key: 'exportar', label: 'Exportar' },
 ];
 
 const GEN_STAGES = [
-  'Enviando roteiro para processamento',
   'Sintetizando narração (ElevenLabs via Monid)',
   'Compondo trilha sonora',
   'Renderizando cenas animadas',
   'Finalizando arquivo de vídeo',
 ];
 
+const BRIEF_FIELDS: { key: keyof Brief; label: string; placeholder: string; area?: boolean }[] = [
+  { key: 'produto', label: 'Produto/Marca', placeholder: 'Ex.: Curta' },
+  { key: 'publico_alvo', label: 'Público-alvo', placeholder: 'Ex.: Pequenos empresários 25-45 anos' },
+  { key: 'objetivo', label: 'Objetivo', placeholder: 'Ex.: conversão, awareness, explicação' },
+  { key: 'tom', label: 'Tom de voz', placeholder: 'Ex.: jovem e descontraído' },
+  { key: 'idioma', label: 'Idioma da narração', placeholder: 'Ex.: pt-BR, en-US' },
+  { key: 'cta', label: 'CTA e link/destino', placeholder: 'Ex.: Acesse curta.app agora' },
+  { key: 'estilo_visual', label: 'Estilo visual de animação', placeholder: 'Ex.: motion graphics 2D flat' },
+  { key: 'referencias', label: 'Referências/restrições', placeholder: 'Ex.: cores da marca, coisas a evitar', area: true },
+];
+
 const initialWiz: WizardData = {
   link: '',
   duration: null,
-  titulo: '',
-  roteiro: '',
-  styleId: null,
-  trackName: null,
+  brief: { ...emptyBrief },
+  roteiro: null,
 };
+
+type Stage = 'idle' | 'running' | 'done';
 
 function slug(s: string): string {
   return (
@@ -83,11 +103,55 @@ function buildSummary(project: Project): string {
     'Status: ' + (project.status === 'pronto' ? 'Pronto' : project.status),
     'Criado em: ' + project.createdAt,
     '',
-    'Roteiro:',
+    'Roteiro (narração):',
     project.roteiro,
     '',
-    '— Gerado no protótipo Curta (demonstração).',
+    'Roteiro técnico (tabela):',
+    project.tabela_md || '(não disponível)',
+    '',
+    '— Gerado no Curta.',
   ].join('\n');
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function renderMarkdownTable(md: string): string {
+  if (!md) return '';
+  const lines = md.split('\n').filter((l) => l.trim().length > 0);
+  const tableRows = lines.filter((l) => /^\s*\|.*\|\s*$/.test(l));
+  if (tableRows.length < 2) {
+    return '<pre class="roteiro-md-fallback">' + escapeHtml(md) + '</pre>';
+  }
+  const rows = tableRows.map((l) =>
+    l
+      .replace(/^\s*\|/, '')
+      .replace(/\|\s*$/, '')
+      .split('|')
+      .map((c) => c.trim())
+  );
+  const header = rows[0];
+  const body = rows.slice(2);
+  const ths = header.map((h) => '<th>' + escapeHtml(h) + '</th>').join('');
+  const trs = body
+    .map((r) => {
+      const tds = r.map((c) => '<td>' + escapeHtml(c) + '</td>').join('');
+      return '<tr>' + tds + '</tr>';
+    })
+    .join('');
+  return (
+    '<table class="roteiro-table"><thead><tr>' +
+    ths +
+    '</tr></thead><tbody>' +
+    trs +
+    '</tbody></table>'
+  );
 }
 
 export default function NovoPage() {
@@ -100,8 +164,6 @@ export default function NovoPage() {
   );
 }
 
-type Stage = 'idle' | 'running' | 'done';
-
 function WizardShell() {
   const router = useRouter();
   const store = useStore();
@@ -109,13 +171,10 @@ function WizardShell() {
   const [stepIndex, setStepIndex] = useState(0);
   const [wiz, setWiz] = useState<WizardData>(initialWiz);
   const [stage, setStage] = useState<Stage>('idle');
+  const [generating, setGenerating] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
   const [progress, setProgress] = useState(0);
   const [lastProject, setLastProject] = useState<Project | null>(null);
-  const [analyzing, setAnalyzing] = useState(false);
-  const [linkResult, setLinkResult] = useState<{ titulo: string; roteiro: string } | null>(null);
-
-  const wordLimit = wiz.duration === 60 ? 140 : 70;
-  const wordCount = wiz.roteiro.trim() ? wiz.roteiro.trim().split(/\s+/).length : 0;
 
   const key = WIZ_STEPS[stepIndex].key;
 
@@ -130,12 +189,15 @@ function WizardShell() {
       toast('Escolha uma duração para continuar.');
       return false;
     }
-    if (key === 'roteiro' && wiz.roteiro.trim().length < 8) {
-      toast('Escreva um roteiro antes de continuar.');
-      return false;
+    if (key === 'brief') {
+      const b = wiz.brief;
+      if (!b.produto.trim() || !b.cta.trim()) {
+        toast('Preencha ao menos Produto/Marca e CTA antes de gerar o roteiro.');
+        return false;
+      }
     }
-    if (key === 'estilo' && (!wiz.styleId || !wiz.trackName)) {
-      toast('Escolha um estilo de narração e uma trilha.');
+    if (key === 'roteiro' && (!wiz.roteiro || !wiz.roteiro.narracao_texto)) {
+      toast('Gere o roteiro antes de avançar.');
       return false;
     }
     return true;
@@ -143,6 +205,14 @@ function WizardShell() {
 
   function goNext() {
     if (!validateStep()) return;
+    if (key === 'brief') {
+      setStage('idle');
+      setGenerating(false);
+      setProgress(0);
+      setWiz((w) => ({ ...w, roteiro: null }));
+      goToStep(stepIndex + 1);
+      return;
+    }
     if (stepIndex < WIZ_STEPS.length - 1) goToStep(stepIndex + 1);
   }
   function goBack() {
@@ -152,7 +222,7 @@ function WizardShell() {
   async function analyzeLink() {
     const raw = (document.getElementById('input-link') as HTMLInputElement).value.trim();
     if (!raw) {
-      toast('Cole um link para analisar, ou escreva o roteiro do zero.');
+      toast('Cole um link para analisar, ou pule para preencher o brief manualmente.');
       return;
     }
     let url: URL;
@@ -163,7 +233,6 @@ function WizardShell() {
       return;
     }
     setAnalyzing(true);
-    setLinkResult(null);
     try {
       const res = await fetch('/api/suggest', {
         method: 'POST',
@@ -174,23 +243,75 @@ function WizardShell() {
         }),
       });
       const data = await res.json();
-      if (!res.ok || !data.ok) {
-        toast(data?.message || 'Não foi possível analisar o site agora.');
+      if (!res.ok || !data.ok || !data.brief) {
+        toast(data?.message || 'Não foi possível analisar o site.');
         setAnalyzing(false);
         return;
       }
-      const titulo: string = data.titulo || 'Conheça ' + url.hostname.replace(/^www\./, '');
-      const cenas: string[] = Array.isArray(data.cenas) ? data.cenas : [];
-      const roteiro = cenas.join('\n\n');
-      setLinkResult({ titulo, roteiro: roteiro });
-      setWiz((w) => ({ ...w, link: url.toString(), titulo, roteiro }));
-      toast('Sugestão de roteiro gerada a partir do link.');
+      const brief: Brief = { ...emptyBrief, ...data.brief };
+      setWiz((w) => ({ ...w, link: url.toString(), brief }));
+      toast('Brief extraído do link. Revise e ajuste antes de gerar.');
+      goToStep(WIZ_STEPS.findIndex((s) => s.key === 'brief'));
     } catch {
-      toast('Falha de conexão ao analisar o site. Tente novamente.');
+      toast('Falha de conexão ao analisar o site.');
     } finally {
       setAnalyzing(false);
     }
   }
+
+  async function runRoteiroGeneration() {
+    if (generating) return;
+    setGenerating(true);
+    setStage('running');
+    setProgress(0);
+    let pct = 0;
+    const tick = window.setInterval(() => {
+      pct = Math.min(90, pct + 8 + Math.random() * 6);
+      setProgress(Math.round(pct));
+    }, 350);
+    try {
+      const res = await fetch('/api/roteiro', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          brief: wiz.brief,
+          durationSeconds: wiz.duration ?? 30,
+        }),
+      });
+      const data = await res.json();
+      window.clearInterval(tick);
+      if (!res.ok || !data.ok || !data.roteiro) {
+        toast(data?.message || 'Falha ao gerar roteiro.');
+        setStage('idle');
+        setGenerating(false);
+        return;
+      }
+      const roteiro: RoteiroOutput = data.roteiro;
+      setWiz((w) => ({ ...w, roteiro }));
+      setProgress(100);
+      setStage('done');
+      toast('Roteiro gerado.');
+      window.setTimeout(() => {
+        setGenerating(false);
+        goToStep(WIZ_STEPS.findIndex((s) => s.key === 'roteiro'));
+      }, 500);
+    } catch {
+      window.clearInterval(tick);
+      toast('Falha de conexão ao gerar roteiro.');
+      setStage('idle');
+      setGenerating(false);
+    }
+  }
+
+  useEffect(() => {
+    if (key === 'gerando' && !generating && stage !== 'done' && stage !== 'running') {
+      void runRoteiroGeneration();
+    }
+    if (key !== 'gerando' && stage === 'running') {
+      setStage('idle');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
 
   function startGeneration() {
     const cost = wiz.duration === 60 ? 2 : 1;
@@ -215,15 +336,23 @@ function WizardShell() {
   }
 
   function finishGeneration(cost: number) {
-    const styleObj = STYLES.find((s) => s.id === wiz.styleId) || STYLES[0];
+    const roteiro = wiz.roteiro;
+    if (!roteiro) {
+      toast('Roteiro ausente. Volte e gere antes de finalizar.');
+      setStage('idle');
+      return;
+    }
+    const styleObj = matchStyle(roteiro.voz.estilo);
+    const trilhaNome = matchTrack(roteiro.trilha_mood);
     const project: Project = {
       id: genId(),
-      titulo: wiz.titulo || 'Vídeo sem título',
-      roteiro: wiz.roteiro,
+      titulo: wiz.brief.produto || 'Vídeo sem título',
+      roteiro: roteiro.narracao_texto,
+      tabela_md: roteiro.tabela_md,
       duracao: wiz.duration || 30,
       estiloId: styleObj.id,
       estiloNome: styleObj.nome,
-      trilhaNome: wiz.trackName || TRACKS[0],
+      trilhaNome,
       status: 'pronto',
       createdAt: new Date().toISOString().slice(0, 10),
     };
@@ -231,7 +360,6 @@ function WizardShell() {
     store.addProject(project);
     setLastProject(project);
     setStage('done');
-    setStepIndex(WIZ_STEPS.length - 1);
     toast('Vídeo gerado com sucesso!');
   }
 
@@ -249,8 +377,21 @@ function WizardShell() {
     toast('Download iniciado: ' + filename);
   }
 
+  function resetWizard() {
+    setWiz(initialWiz);
+    setLastProject(null);
+    setStage('idle');
+    setGenerating(false);
+    setProgress(0);
+    setStepIndex(0);
+  }
+
   const eyebrowText = `Passo ${stepIndex + 1} de ${WIZ_STEPS.length}`;
-  const navVisible = key !== 'gerar' && key !== 'exportar';
+  const navVisible = key !== 'gerando' && key !== 'roteiro' && key !== 'exportar';
+  const roteiro = wiz.roteiro;
+  const tableHtml = roteiro ? renderMarkdownTable(roteiro.tabela_md) : '';
+  const styleObj = roteiro ? matchStyle(roteiro.voz.estilo) : null;
+  const trackName = roteiro ? matchTrack(roteiro.trilha_mood) : TRACKS[0];
 
   return (
     <>
@@ -274,31 +415,7 @@ function WizardShell() {
         ))}
       </div>
 
-      {/* Step 1: Link */}
-      <div className={`step-panel${key === 'link' ? ' is-active' : ''}`} data-step="link">
-        <p className="eyebrow step-eyebrow">{eyebrowText}</p>
-        <h2 className="step-title">Cole o link do site</h2>
-        <p className="step-sub">A Curta analisa a página e sugere um título e um roteiro de partida. Não tem um link à mão? Pode escrever o roteiro do zero.</p>
-        <label className="field">
-          <span className="l">Link do site</span>
-          <input type="url" id="input-link" placeholder="https://seusite.com.br" defaultValue={wiz.link} />
-        </label>
-        <div className="link-actions">
-          <button className="btn btn-primary" onClick={analyzeLink} disabled={analyzing}>
-            {analyzing ? 'Analisando site...' : 'Analisar site'}
-          </button>
-          <button className="btn btn-ghost" onClick={goNext}>Escrever roteiro do zero</button>
-        </div>
-        {linkResult && (
-          <div className="link-suggestion">
-            <p className="eyebrow">Sugestão gerada a partir do link</p>
-            <h4>{linkResult.titulo}</h4>
-            <p>{linkResult.roteiro}</p>
-          </div>
-        )}
-      </div>
-
-      {/* Step 2: Duração */}
+      {/* Step 1: Duração */}
       <div className={`step-panel${key === 'duracao' ? ' is-active' : ''}`} data-step="duracao">
         <p className="eyebrow step-eyebrow">{eyebrowText}</p>
         <h2 className="step-title">Qual a duração do vídeo?</h2>
@@ -324,90 +441,162 @@ function WizardShell() {
         </div>
       </div>
 
-      {/* Step 3: Roteiro */}
-      <div className={`step-panel${key === 'roteiro' ? ' is-active' : ''}`} data-step="roteiro">
+      {/* Step 2: Link */}
+      <div className={`step-panel${key === 'link' ? ' is-active' : ''}`} data-step="link">
         <p className="eyebrow step-eyebrow">{eyebrowText}</p>
-        <h2 className="step-title">Escreva o roteiro</h2>
-        <p className="step-sub">Escreva como se estivesse explicando em voz alta. Frases curtas narram melhor. Se você veio de um link, revise a sugestão antes de continuar.</p>
+        <h2 className="step-title">Cole o link do site</h2>
+        <p className="step-sub">A Curta analisa a página e sugere um brief de partida (produto, público, tom, CTA...). Sem link? Preencha o brief manualmente.</p>
         <label className="field">
-          <span className="l">Título do vídeo</span>
-          <input
-            type="text"
-            placeholder="Ex.: Como funciona o Pix"
-            maxLength={70}
-            value={wiz.titulo}
-            onChange={(e) => setWiz((w) => ({ ...w, titulo: e.target.value }))}
-          />
+          <span className="l">Link do site</span>
+          <input type="url" id="input-link" placeholder="https://seusite.com.br" defaultValue={wiz.link} />
         </label>
-        <label className="field">
-          <span className="l">Roteiro</span>
+        <div className="link-actions">
+          <button className="btn btn-primary" onClick={analyzeLink} disabled={analyzing}>
+            {analyzing ? 'Analisando site...' : 'Analisar site'}
+          </button>
+          <button className="btn btn-ghost" onClick={() => goToStep(WIZ_STEPS.findIndex((s) => s.key === 'brief'))}>
+            Preencher brief manualmente
+          </button>
+        </div>
+      </div>
+
+      {/* Step 3: Brief */}
+      <div className={`step-panel wide${key === 'brief' ? ' is-active' : ''}`} data-step="brief">
+        <p className="eyebrow step-eyebrow">{eyebrowText}</p>
+        <h2 className="step-title">Brief do vídeo</h2>
+        <p className="step-sub">Revise os campos abaixo antes de gerar o roteiro. Se vier de um link, ajuste o que parecer errado.</p>
+        <div className="brief-grid">
+          {BRIEF_FIELDS.map((f) => (
+            <label className="field" key={f.key}>
+              <span className="l">{f.label}</span>
+              {f.area ? (
+                <textarea
+                  placeholder={f.placeholder}
+                  value={wiz.brief[f.key]}
+                  onChange={(e) => setWiz((w) => ({ ...w, brief: { ...w.brief, [f.key]: e.target.value } }))}
+                />
+              ) : (
+                <input
+                  type="text"
+                  placeholder={f.placeholder}
+                  value={wiz.brief[f.key]}
+                  onChange={(e) => setWiz((w) => ({ ...w, brief: { ...w.brief, [f.key]: e.target.value } }))}
+                />
+              )}
+            </label>
+          ))}
+        </div>
+      </div>
+
+      {/* Step 4: Gerando */}
+      <div className={`step-panel${key === 'gerando' ? ' is-active' : ''}`} data-step="gerando">
+        <p className="eyebrow step-eyebrow">{eyebrowText}</p>
+        <h2 className="step-title">Gerando roteiro</h2>
+        <p className="step-sub">Montando tabela técnica, narração para ElevenLabs e sugestão de voz a partir do brief.</p>
+        <div className="gerar-stage">
+          <div className="progress-track">
+            <div className="progress-fill" style={{ width: progress + '%' }} />
+          </div>
+          <p style={{ fontFamily: 'var(--font-mono)', marginTop: '0.75rem' }}>
+            {stage === 'done' ? 'Roteiro pronto. Avançando...' : 'Processando...'}
+          </p>
+        </div>
+      </div>
+
+      {/* Step 5: Roteiro */}
+      <div className={`step-panel wide${key === 'roteiro' ? ' is-active' : ''}`} data-step="roteiro">
+        <p className="eyebrow step-eyebrow">{eyebrowText}</p>
+        <h2 className="step-title">Roteiro gerado</h2>
+        <p className="step-sub">Direção técnica completa + texto pronto para síntese de voz (ElevenLabs).</p>
+        {roteiro?.aviso && (
+          <div className="roteiro-aviso">
+            <p className="eyebrow">Aviso</p>
+            <p>{roteiro.aviso}</p>
+          </div>
+        )}
+        <div className="roteiro-section">
+          <p className="eyebrow" style={{ marginBottom: '0.75rem' }}>Parte 1 — Direção técnica</p>
+          <div
+            className="roteiro-table-wrap"
+            dangerouslySetInnerHTML={{ __html: tableHtml }}
+          />
+        </div>
+        <div className="roteiro-section">
+          <p className="eyebrow" style={{ marginBottom: '0.75rem' }}>Parte 2 — Narração (ElevenLabs)</p>
           <textarea
-            placeholder="Ex.: O Pix é o sistema de pagamento instantâneo do Brasil. Em segundos, você transfere dinheiro..."
-            value={wiz.roteiro}
-            onChange={(e) => setWiz((w) => ({ ...w, roteiro: e.target.value }))}
+            className="roteiro-narracao"
+            readOnly
+            value={roteiro?.narracao_texto || ''}
+            placeholder="Gere o roteiro para ver a narração."
+            onFocus={(e) => e.target.select()}
           />
-          <span className="hint"><span>{wordCount}</span> / <span>{wordLimit}</span> palavras recomendadas</span>
-        </label>
+          {roteiro?.voz && (roteiro.voz.estilo || roteiro.voz.estabilidade || roteiro.voz.exaggeration) && (
+            <div className="roteiro-voz-card">
+              <p className="eyebrow" style={{ marginBottom: '0.5rem' }}>Sugestão de voz</p>
+              <dl>
+                <div><dt>Estilo</dt><dd>{roteiro.voz.estilo || '—'}</dd></div>
+                <div><dt>Estabilidade</dt><dd>{roteiro.voz.estabilidade || '—'}</dd></div>
+                <div><dt>Exaggeration</dt><dd>{roteiro.voz.exaggeration || '—'}</dd></div>
+              </dl>
+            </div>
+          )}
+        </div>
+        <div className="roteiro-section">
+          <p className="eyebrow" style={{ marginBottom: '0.5rem' }}>Trilha sonora (mood)</p>
+          <div className="track-row">
+            <span className={`track-chip is-selected`}>{trackName}</span>
+            <span className="roteiro-mood-source">derivado de: {roteiro?.trilha_mood || 'ambiente calmo'}</span>
+          </div>
+        </div>
+        <div className="roteiro-actions">
+          <button className="btn btn-ghost" onClick={() => goToStep(WIZ_STEPS.findIndex((s) => s.key === 'brief'))}>
+            Voltar ao brief
+          </button>
+          <button className="btn btn-primary" onClick={goNext}>
+            Continuar
+          </button>
+        </div>
+        <p style={{ fontFamily: 'var(--font-mono)', marginTop: '0.75rem', opacity: 0.7, fontSize: '0.85rem' }}>
+          Estilo derivado: {styleObj?.nome ?? '—'} · Trilha: {trackName}
+        </p>
       </div>
 
-      {/* Step 4: Estilo */}
-      <div className={`step-panel wide${key === 'estilo' ? ' is-active' : ''}`} data-step="estilo">
-        <p className="eyebrow step-eyebrow">{eyebrowText}</p>
-        <h2 className="step-title">Estilo de narração e trilha</h2>
-        <p className="step-sub">A narração é sintetizada com vozes da ElevenLabs via Monid.</p>
-        <div className="style-grid">
-          {STYLES.map((s) => (
-            <button
-              key={s.id}
-              className={`style-card${wiz.styleId === s.id ? ' is-selected' : ''}`}
-              onClick={() => setWiz((w) => ({ ...w, styleId: s.id }))}
-            >
-              <h4>{s.nome}</h4>
-              <p>{s.desc}</p>
-            </button>
-          ))}
-        </div>
-        <p className="eyebrow" style={{ marginBottom: '0.75rem' }}>Clima da trilha sonora</p>
-        <div className="track-row">
-          {TRACKS.map((t) => (
-            <button
-              key={t}
-              className={`track-chip${wiz.trackName === t ? ' is-selected' : ''}`}
-              onClick={() => setWiz((w) => ({ ...w, trackName: t }))}
-            >
-              {t}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Step 5: Preview vídeo */}
+      {/* Step 6: Preview vídeo */}
       <div className={`step-panel${key === 'preview-video' ? ' is-active' : ''}`} data-step="preview-video">
         <p className="eyebrow step-eyebrow">{eyebrowText}</p>
         <h2 className="step-title">Prévia do vídeo</h2>
-        <p className="step-sub">Um rascunho rápido de como as cenas vão se encaixar, a partir do seu roteiro.</p>
+        <p className="step-sub">Um rascunho rápido de como as cenas vão se encaixar, a partir do roteiro.</p>
         <div className="preview-stage">
           <span className="preview-badge">Prévia · rascunho</span>
-          {key === 'preview-video' && <KineticPreview script={wiz.roteiro} title={wiz.titulo} />}
+          {key === 'preview-video' && (
+            <KineticPreview
+              script={roteiro?.narracao_texto || ''}
+              title={wiz.brief.produto || 'Vídeo'}
+            />
+          )}
         </div>
       </div>
 
-      {/* Step 6: Preview áudio */}
+      {/* Step 7: Preview áudio */}
       <div className={`step-panel${key === 'preview-audio' ? ' is-active' : ''}`} data-step="preview-audio">
         <p className="eyebrow step-eyebrow">{eyebrowText}</p>
         <h2 className="step-title">Prévia do áudio</h2>
-        <p className="step-sub">Ouça o ritmo e o clima da narração escolhida. A voz final é gerada na etapa de geração.</p>
+        <p className="step-sub">Ouça o ritmo e o clima da narração sugerida.</p>
         {key === 'preview-audio' && <AudioPreview />}
       </div>
 
-      {/* Step 7: Gerar */}
-      <div className={`step-panel${key === 'gerar' ? ' is-active' : ''}`} data-step="gerar">
+      {/* Step 8: Exportar */}
+      <div className={`step-panel${key === 'exportar' ? ' is-active' : ''}`} data-step="exportar">
         <p className="eyebrow step-eyebrow">{eyebrowText}</p>
-        <h2 className="step-title">Gerar vídeo final</h2>
-        <p className="step-sub">Isso vai consumir {wiz.duration === 60 ? '2 créditos (R$ 50)' : '1 crédito (R$ 25, oferta)'} do seu saldo.</p>
+        <h2 className="step-title">Gerar e exportar</h2>
+        <p className="step-sub">
+          Isso vai consumir {wiz.duration === 60 ? '2 créditos (R$ 50)' : '1 crédito (R$ 25, oferta)'} do seu saldo e gerar o vídeo final.
+        </p>
         <div className="gerar-stage">
           {stage === 'idle' && (
-            <button className="btn btn-primary btn-lg btn-block" onClick={startGeneration}>Gerar vídeo</button>
+            <button className="btn btn-primary btn-lg btn-block" onClick={startGeneration}>
+              Gerar vídeo final
+            </button>
           )}
           {stage === 'running' && (
             <div>
@@ -421,41 +610,38 @@ function WizardShell() {
               </div>
             </div>
           )}
-          {stage === 'done' && (
-            <p style={{ color: 'var(--success)', fontFamily: 'var(--font-mono)' }}>Vídeo gerado. Continue para exportar.</p>
+          {stage === 'done' && lastProject && (
+            <div>
+              <div className="preview-stage" style={{ marginBottom: '1rem' }}>
+                <span className="preview-badge">Pronto</span>
+                <KineticPreview script={lastProject.roteiro} title={lastProject.titulo} />
+              </div>
+              <div className="export-grid">
+                <button
+                  className="btn btn-quiet"
+                  onClick={() => download(slug(lastProject.titulo) + '.srt', buildSrt(lastProject))}
+                >
+                  Baixar legendas (.srt)
+                </button>
+                <button
+                  className="btn btn-quiet"
+                  onClick={() => download(slug(lastProject.titulo) + '-resumo.txt', buildSummary(lastProject))}
+                >
+                  Baixar resumo (.txt)
+                </button>
+              </div>
+              <p style={{ color: 'var(--success)', fontFamily: 'var(--font-mono)', marginTop: '1rem' }}>
+                Vídeo gerado. Baixe os arquivos ou crie outro.
+              </p>
+            </div>
           )}
         </div>
-      </div>
-
-      {/* Step 8: Exportar */}
-      <div className={`step-panel${key === 'exportar' ? ' is-active' : ''}`} data-step="exportar">
-        <p className="eyebrow step-eyebrow">{eyebrowText}</p>
-        <h2 className="step-title">Exportar</h2>
-        <p className="step-sub">Seu vídeo está pronto. Baixe os arquivos ou volte para os seus projetos.</p>
-        <div className="preview-stage">
-          <span className="preview-badge">Pronto</span>
-          {lastProject && <KineticPreview script={lastProject.roteiro} title={lastProject.titulo} />}
-        </div>
-        <div className="export-grid">
-          <button
-            className="btn btn-quiet"
-            onClick={() => lastProject && download(slug(lastProject.titulo) + '.srt', buildSrt(lastProject))}
-            disabled={!lastProject}
-          >
-            Baixar legendas (.srt)
-          </button>
-          <button
-            className="btn btn-quiet"
-            onClick={() => lastProject && download(slug(lastProject.titulo) + '-resumo.txt', buildSummary(lastProject))}
-            disabled={!lastProject}
-          >
-            Baixar resumo (.txt)
-          </button>
-        </div>
-        <div className="wizard-nav" style={{ maxWidth: 'none' }}>
-          <button className="btn btn-ghost" onClick={() => router.push('/projetos')}>Ver meus projetos</button>
-          <button className="btn btn-primary" onClick={() => { setWiz(initialWiz); setLastProject(null); setStage('idle'); setStepIndex(0); setLinkResult(null); }}>Criar outro vídeo</button>
-        </div>
+        {stage === 'done' && (
+          <div className="wizard-nav" style={{ marginTop: '1.5rem', maxWidth: 'none' }}>
+            <button className="btn btn-ghost" onClick={() => router.push('/projetos')}>Ver meus projetos</button>
+            <button className="btn btn-primary" onClick={resetWizard}>Criar outro vídeo</button>
+          </div>
+        )}
       </div>
 
       {navVisible && (
@@ -496,7 +682,7 @@ function AudioPreview() {
 
     const play = () => {
       try {
-        const Ctx = window.AudioContext || (window as any).webkitAudioContext;
+        const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
         const audioCtx: AudioContext = new Ctx();
         if (audioCtx.state === 'suspended') audioCtx.resume();
         const notes = [220, 262, 294, 262, 330, 294, 220, 262];

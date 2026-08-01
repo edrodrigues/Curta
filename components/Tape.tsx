@@ -29,8 +29,6 @@ export function Tape() {
           <span className="dot" />
           <span className="word">Curta</span>
         </Link>
-        <span className="proto-pill">Protótipo</span>
-
         <nav className="tape-nav" style={{ display: showGuestHeader ? 'flex' : 'none' }}>
           <Link href="/#como-funciona" className="navlink">Como funciona</Link>
           <Link href="/#precos" className="navlink">Preços</Link>

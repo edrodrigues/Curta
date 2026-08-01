@@ -95,7 +95,7 @@ export default function HomePage() {
         <div className="container footer-row">
           <div>
             <div className="brand" style={{ marginBottom: '0.6rem' }}><span className="dot" /><span className="word">Curta</span></div>
-            <p className="footer-note">Este é um protótipo de demonstração. Cadastro, pagamentos e geração de vídeo são simulados — nenhuma cobrança real é feita e nenhum vídeo real é produzido.</p>
+            <p className="footer-note">Curta — MicroSaaS para criação de vídeos explicativos animados com IA.</p>
           </div>
           <div className="footer-links">
             <Link href="/#como-funciona">Como funciona</Link>
