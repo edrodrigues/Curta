@@ -40,7 +40,7 @@ O protótipo estático (`curta.html`) define a identidade visual, as cópias em 
 | **Geração de vídeo** | **Monid → MiniMax Hailuo-2.3** (`minimax /v1/video_generation`); concatenação com ffmpeg |
 | **Geração de narração** | **Monid → ElevenLabs** (`elevenlabs /text-to-speech`) |
 | **Geração de trilha sonora** | **Monid → ElevenLabs Music** (`elevenlabs /v1/music`) |
-| Inferência de IA (roteiro, resumo do link) | Vercel AI SDK + Vercel AI Gateway |
+| Inferência de IA (roteiro, resumo do link) | Vercel AI SDK + Cheaper Inference (provedor OpenAI-compatible, `@ai-sdk/openai`) |
 | Pagamentos | InfinitePay Checkout + Webhooks (Edge Function) |
 
 > A Vercel hospeda apenas o Next.js (UI + rotas que o usuário chama do navegador). Todo o estado, auth, arquivos, jobs e processamento assíncrono vivem no Supabase. O produto fica mais coeso e o limite de timeout das functions da Vercel deixa de ser um risco para o processamento de vídeo, que é completamente movido para fora das functions.
@@ -207,6 +207,9 @@ SUPABASE_STORAGE_BUCKET_AUDIO=audio
 SUPABASE_STORAGE_BUCKET_VIDEO=video
 SUPABASE_STORAGE_BUCKET_SRT=srt
 
+# Cheaper Inference (roteiro/LLM)
+CHEAPER_INFERENCE_API_KEY=               # ir_live_..., server-only
+
 # Monid
 MONID_API_KEY=                           # server-only
 
@@ -219,7 +222,7 @@ NEXT_PUBLIC_APP_URL=
 ```
 
 Crie `.env.example` com chaves vazias e commite-o (NUNCA `.env.local`). Regras:
-- Nunca exponha `MONID_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY` nem `INFINITEPAY_WEBHOOK_SECRET` no cliente — só em API routes / Edge Functions / `lib/supabase/admin.ts`.
+- Nunca exponha `MONID_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `INFINITEPAY_WEBHOOK_SECRET` nem `CHEAPER_INFERENCE_API_KEY` no cliente — só em API routes / Edge Functions / `lib/supabase/admin.ts` / `lib/ai/client.ts`.
 - Variáveis `NEXT_PUBLIC_*` são públicas (vão ao navegador): só `NEXT_PUBLIC_SUPABASE_URL` e `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
 
 ## 5. Sistema de créditos e preços
@@ -411,7 +414,7 @@ Reaproveitar 1:1 do protótipo (`curta.html`) para o app web:
 - `/projetos` — Meus projetos
 - `/creditos` — Comprar créditos (gera o link de pagamento InfinitePay, seção 6)
 
-No passo "Link do site", a sugestão de roteiro no protótipo é simulada; na versão real, use o Vercel AI SDK para: (a) buscar o conteúdo da página (fetch + extração de texto), (b) gerar um roteiro sugerido em pt-BR com um modelo via Vercel AI Gateway, respeitando o limite de palavras da duração escolhida, e dividir em cenas (uma por sentença) — que vão virar prompts do MiniMax na seção 8.
+No passo "Link do site", a sugestão de roteiro no protótipo é simulada; na versão real, use o Vercel AI SDK para: (a) buscar o conteúdo da página (fetch + extração de texto), (b) gerar um roteiro sugerido em pt-BR com um modelo via **Cheaper Inference** (provedor OpenAI-compatible; base URL `https://api.cheaperinference.com/v1`; chave `CHEAPER_INFERENCE_API_KEY`; modelo `deepseek-v4-flash`; `generateObject` com zod schema `{ titulo, cenas[] }` e `providerOptions.openai.strictJsonSchema = true`), respeitando o limite de palavras da duração escolhida, e dividir em cenas (uma por sentença) — que vão virar prompts do MiniMax na seção 8. Implementação de referência em `lib/ai/client.ts` + `lib/ai/generate-script.ts`, exposta pela rota server `app/api/suggest/route.ts`.
 
 ## 10. Identidade visual
 
@@ -472,7 +475,7 @@ select cron.schedule(
 ## 13. Checklist de segurança antes do go-live
 
 ### Geral
-- [ ] Nenhuma chave (`MONID_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `INFINITEPAY_WEBHOOK_SECRET`) em código client-side ou variáveis `NEXT_PUBLIC_*`.
+- [ ] Nenhuma chave (`MONID_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `INFINITEPAY_WEBHOOK_SECRET`, `CHEAPER_INFERENCE_API_KEY`) em código client-side ou variáveis `NEXT_PUBLIC_*`.
 - [ ] Webhook da InfinitePay usa token secreto na URL (query) e valida `paid_amount` contra o antes de creditar (via RPC `apply_purchase`).
 - [ ] Webhook é idempotente (reprocessar o mesmo evento não credita duas vezes) — a RPC rejeita se `orders.status` já `paid`.
 - [ ] Débito de créditos só após o pedido de geração aceito; falhas geram estorno automático.

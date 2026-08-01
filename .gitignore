@@ -18,6 +18,7 @@ tmp/
 out/
 build/
 next-env.d.ts
+tsconfig.tsbuildinfo
 
 # Node
 node_modules/

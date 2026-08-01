@@ -149,7 +149,7 @@ function WizardShell() {
     if (stepIndex > 0) goToStep(stepIndex - 1);
   }
 
-  function analyzeLink() {
+  async function analyzeLink() {
     const raw = (document.getElementById('input-link') as HTMLInputElement).value.trim();
     if (!raw) {
       toast('Cole um link para analisar, ou escreva o roteiro do zero.');
@@ -162,23 +162,34 @@ function WizardShell() {
       toast('Link inválido. Confira o endereço e tente novamente.');
       return;
     }
-    const domain = url.hostname.replace(/^www\./, '');
     setAnalyzing(true);
     setLinkResult(null);
-    window.setTimeout(() => {
-      const pretty = domain.split('.')[0];
-      const cap = pretty.charAt(0).toUpperCase() + pretty.slice(1);
-      const suggestedTitle = 'Conheça ' + cap;
-      const suggestedScript =
-        cap +
-        ' reúne em um só lugar tudo o que você precisa saber sobre o que oferece. Explore as principais soluções, entenda como funciona na prática e veja por que tantas pessoas já confiam em ' +
-        domain +
-        '.';
-      setLinkResult({ titulo: suggestedTitle, roteiro: suggestedScript });
-      setWiz((w) => ({ ...w, link: url.toString(), titulo: suggestedTitle, roteiro: suggestedScript }));
+    try {
+      const res = await fetch('/api/suggest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: url.toString(),
+          durationSeconds: wiz.duration ?? 30,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        toast(data?.message || 'Não foi possível analisar o site agora.');
+        setAnalyzing(false);
+        return;
+      }
+      const titulo: string = data.titulo || 'Conheça ' + url.hostname.replace(/^www\./, '');
+      const cenas: string[] = Array.isArray(data.cenas) ? data.cenas : [];
+      const roteiro = cenas.join('\n\n');
+      setLinkResult({ titulo, roteiro: roteiro });
+      setWiz((w) => ({ ...w, link: url.toString(), titulo, roteiro }));
+      toast('Sugestão de roteiro gerada a partir do link.');
+    } catch {
+      toast('Falha de conexão ao analisar o site. Tente novamente.');
+    } finally {
       setAnalyzing(false);
-      toast('Sugestão de roteiro gerada a partir do link (simulação).');
-    }, 1100);
+    }
   }
 
   function startGeneration() {
@@ -280,7 +291,7 @@ function WizardShell() {
         </div>
         {linkResult && (
           <div className="link-suggestion">
-            <p className="eyebrow">Sugestão gerada a partir do link · simulação</p>
+            <p className="eyebrow">Sugestão gerada a partir do link</p>
             <h4>{linkResult.titulo}</h4>
             <p>{linkResult.roteiro}</p>
           </div>
