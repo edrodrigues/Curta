@@ -400,6 +400,21 @@ function WizardShell() {
       toast('Roteiro sem cenas para gerar o vídeo.');
       return;
     }
+
+    const hasDone = !!wiz.finalVideoUrl && wiz.videoStage === 'done';
+    const stageActive = wiz.videoStage === 'running' || wiz.videoStage === 'assembling';
+    const hasUsableRenders =
+      wiz.sceneRenders.length > 0 &&
+      wiz.sceneRenders.some(
+        (s) =>
+          (s.status === 'concluido' && !!s.clip_url) ||
+          ((s.status === 'pendente' || s.status === 'rodando') && !!s.run_id)
+      );
+    if (hasDone || stageActive || hasUsableRenders) {
+      goToStep(stepIndex + 1);
+      return;
+    }
+
     if (videoRunningRef.current) return;
     videoRunningRef.current = true;
 
@@ -452,7 +467,13 @@ function WizardShell() {
 
       const allFailed = jobs.every((j) => j.status === 'falhou');
       if (allFailed) {
-        toast('Todos os clipes falharam ao iniciar.');
+        const errs = jobs.map((j) => j.error || '').join(' ');
+        const hint = /MONID_API_KEY/.test(errs)
+          ? 'Chave da Monid ausente. Configure MONID_API_KEY.'
+          : /Limite de requisições|429/.test(errs)
+            ? 'Limite de requisições da Monid atingido. Aguarde e tente novamente.'
+            : 'Todos os clipes falharam ao iniciar.';
+        toast(hint);
         setWiz((w) => ({ ...w, videoStage: 'error' }));
         videoRunningRef.current = false;
         return;
@@ -650,14 +671,23 @@ function WizardShell() {
     if (!allDone) return;
     const anySuccess = wiz.sceneRenders.some((s) => s.status === 'concluido' && s.clip_url);
     if (!anySuccess) {
+      const errs = wiz.sceneRenders.map((s) => s.error || '').join(' ');
+      const hint = /MONID_API_KEY/.test(errs)
+        ? 'Chave da Monid ausente. Configure MONID_API_KEY.'
+        : /Limite de requisições|429/.test(errs)
+          ? 'Limite de requisições da Monid atingido. Aguarde e tente novamente.'
+          : 'Todos os clipes falharam na geração.';
       setWiz((w) => ({ ...w, videoStage: 'error' }));
       videoRunningRef.current = false;
-      toast('Todos os clipes falharam na geração.');
+      toast(hint);
       return;
     }
 
     if (assemblingRef.current) return;
     assemblingRef.current = true;
+
+    const controller = new AbortController();
+    let cancelled = false;
 
     (async () => {
       setWiz((w) => ({ ...w, videoStage: 'assembling' }));
@@ -670,23 +700,33 @@ function WizardShell() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ clip_urls: ordered, project_id: videoTokenRef.current }),
+          signal: controller.signal,
         });
         const data = await res.json();
+        if (cancelled) return;
         if (!res.ok || !data.ok || !data.video_url) {
           toast(data?.message || 'Falha ao montar o vídeo final.');
           setWiz((w) => ({ ...w, videoStage: 'error' }));
           videoRunningRef.current = false;
+          assemblingRef.current = false;
           return;
         }
         setWiz((w) => ({ ...w, finalVideoUrl: data.video_url, videoStage: 'done' }));
         videoRunningRef.current = false;
+        assemblingRef.current = false;
         toast('Vídeo montado com sucesso.');
-      } catch {
+      } catch (e) {
+        if (cancelled || (e instanceof DOMException && e.name === 'AbortError')) return;
         toast('Falha de conexão ao montar o vídeo final.');
         setWiz((w) => ({ ...w, videoStage: 'error' }));
         videoRunningRef.current = false;
+        assemblingRef.current = false;
       }
     })();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, wiz.sceneRenders]);
 
@@ -843,6 +883,7 @@ function WizardShell() {
 
   const eyebrowText = `Passo ${stepIndex + 1} de ${WIZ_STEPS.length}`;
   const navVisible = key !== 'gerando' && key !== 'roteiro' && key !== 'exportar';
+  const videoActive = wiz.videoStage === 'running' || wiz.videoStage === 'assembling';
   const roteiro = wiz.roteiro;
   const tableHtml = roteiro ? renderMarkdownTable(roteiro.tabela_md) : '';
   const trackName = roteiro ? matchTrack(roteiro.trilha_mood) : TRACKS[0];
@@ -1102,11 +1143,23 @@ function WizardShell() {
           </div>
         </div>
         <div className="roteiro-actions">
-          <button className="btn btn-ghost" onClick={() => goToStep(WIZ_STEPS.findIndex((s) => s.key === 'brief'))}>
+          <button
+            className="btn btn-ghost"
+            onClick={() => goToStep(WIZ_STEPS.findIndex((s) => s.key === 'brief'))}
+            disabled={videoActive}
+          >
             Voltar ao brief
           </button>
-          <button className="btn btn-primary" onClick={goNext}>
-            Continuar
+          <button
+            className="btn btn-primary"
+            onClick={goNext}
+            disabled={videoActive}
+          >
+            {videoActive
+              ? wiz.videoStage === 'assembling'
+                ? 'Montando…'
+                : 'Gerando…'
+              : 'Continuar'}
           </button>
         </div>
       </div>
@@ -1156,12 +1209,22 @@ function WizardShell() {
               </div>
             )}
 
-            {total > 0 && (
+            {wiz.videoStage === 'assembling' ? (
+              <div className="progress-track is-indeterminate" aria-hidden="true">
+                <div className="progress-fill" />
+              </div>
+            ) : total > 0 ? (
               <div className="progress-track">
-                <div className="progress-fill" style={{ width: (wiz.videoStage === 'assembling' ? 100 : pct) + '%' }} />
+                <div className="progress-fill" style={{ width: pct + '%' }} />
+              </div>
+            ) : null}
+            <p style={{ fontFamily: 'var(--font-mono)', marginTop: '0.5rem', marginBottom: '1.25rem' }}>{headline}</p>
+
+            {wiz.videoStage === 'assembling' && (
+              <div className="await-card" style={{ marginBottom: '1.25rem' }}>
+                Montando o vídeo final — costuma levar <b>~45 segundos</b>. Não saia da página.
               </div>
             )}
-            <p style={{ fontFamily: 'var(--font-mono)', marginTop: '0.5rem', marginBottom: '1.25rem' }}>{headline}</p>
 
             {total > 0 && (
               <div className="scene-grid">
@@ -1285,7 +1348,7 @@ function WizardShell() {
 
       {navVisible && (
         <div className="wizard-nav">
-          <button className="btn btn-ghost" onClick={goBack} hidden={stepIndex === 0}>Voltar</button>
+          <button className="btn btn-ghost" onClick={goBack} hidden={stepIndex === 0} disabled={key === 'preview-video' && videoActive}>Voltar</button>
           <button
             className="btn btn-primary"
             onClick={goNext}
