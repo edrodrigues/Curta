@@ -391,6 +391,7 @@ function WizardShell() {
   }
 
   const videoRunningRef = useRef(false);
+  const assemblingRef = useRef(false);
   const videoTokenRef = useRef<string>('');
 
   async function handleContinuarParaVideo() {
@@ -409,6 +410,7 @@ function WizardShell() {
       index: c.index,
       status: 'pendente',
     }));
+    assemblingRef.current = false;
     setWiz((w) => ({ ...w, sceneRenders: seed, finalVideoUrl: null, videoStage: 'running', videoCostEstimateUsd: null }));
     videoStartedAtRef.current = Date.now();
     etaAnchorRef.current = null;
@@ -654,7 +656,9 @@ function WizardShell() {
       return;
     }
 
-    let cancelled = false;
+    if (assemblingRef.current) return;
+    assemblingRef.current = true;
+
     (async () => {
       setWiz((w) => ({ ...w, videoStage: 'assembling' }));
       try {
@@ -668,7 +672,6 @@ function WizardShell() {
           body: JSON.stringify({ clip_urls: ordered, project_id: videoTokenRef.current }),
         });
         const data = await res.json();
-        if (cancelled) return;
         if (!res.ok || !data.ok || !data.video_url) {
           toast(data?.message || 'Falha ao montar o vídeo final.');
           setWiz((w) => ({ ...w, videoStage: 'error' }));
@@ -679,17 +682,13 @@ function WizardShell() {
         videoRunningRef.current = false;
         toast('Vídeo montado com sucesso.');
       } catch {
-        if (cancelled) return;
         toast('Falha de conexão ao montar o vídeo final.');
         setWiz((w) => ({ ...w, videoStage: 'error' }));
         videoRunningRef.current = false;
       }
     })();
-    return () => {
-      cancelled = true;
-    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, wiz.videoStage, wiz.sceneRenders]);
+  }, [key, wiz.sceneRenders]);
 
   useEffect(() => {
     if (key !== 'preview-video' || wiz.videoStage === 'idle' || wiz.videoStage === 'done' || wiz.videoStage === 'error') {
