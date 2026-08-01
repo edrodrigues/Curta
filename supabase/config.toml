@@ -1,0 +1,14 @@
+project_id = "olnrqblgsyyxmtubdoez"
+
+[db.migrations]
+schema_paths = [
+  "./schemas/01_profiles_wallets_transactions.sql",
+  "./schemas/02_credit_packages.sql",
+  "./schemas/03_orders.sql",
+  "./schemas/04_projects.sql",
+  "./schemas/05_render_jobs.sql",
+  "./schemas/06_handle_new_user.sql",
+  "./schemas/07_apply_purchase.sql",
+  "./schemas/08_rls_policies.sql",
+  "./schemas/09_storage.sql",
+]
