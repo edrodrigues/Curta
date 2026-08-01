@@ -35,6 +35,20 @@ const GEN_STAGES = [
   'Finalizando arquivo de vídeo',
 ];
 
+const ROTEIRO_STAGES = [
+  'Analisando o brief',
+  'Estruturando tabela técnica',
+  'Escrevendo narração',
+  'Atribuindo sugestão de voz',
+  'Finalizando roteiro',
+];
+
+const LINK_PHASES = [
+  'Buscando a página…',
+  'Extraindo conteúdo…',
+  'Analisando com IA…',
+];
+
 const BRIEF_FIELDS: { key: keyof Brief; label: string; placeholder: string; area?: boolean }[] = [
   { key: 'produto', label: 'Produto/Marca', placeholder: 'Ex.: Curta' },
   { key: 'publico_alvo', label: 'Público-alvo', placeholder: 'Ex.: Pequenos empresários 25-45 anos' },
@@ -173,6 +187,9 @@ function WizardShell() {
   const [stage, setStage] = useState<Stage>('idle');
   const [generating, setGenerating] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
+  const [analyzePhase, setAnalyzePhase] = useState(-1);
+  const [briefAttempted, setBriefAttempted] = useState(false);
+  const [roteiroStageIdx, setRoteiroStageIdx] = useState(0);
   const [progress, setProgress] = useState(0);
   const [lastProject, setLastProject] = useState<Project | null>(null);
 
@@ -181,6 +198,7 @@ function WizardShell() {
   function goToStep(i: number) {
     setStage('idle');
     setProgress(0);
+    setBriefAttempted(false);
     setStepIndex(Math.max(0, Math.min(WIZ_STEPS.length - 1, i)));
   }
 
@@ -192,6 +210,7 @@ function WizardShell() {
     if (key === 'brief') {
       const b = wiz.brief;
       if (!b.produto.trim() || !b.cta.trim()) {
+        setBriefAttempted(true);
         toast('Preencha ao menos Produto/Marca e CTA antes de gerar o roteiro.');
         return false;
       }
@@ -233,6 +252,10 @@ function WizardShell() {
       return;
     }
     setAnalyzing(true);
+    setAnalyzePhase(0);
+    const phaseTick = window.setInterval(() => {
+      setAnalyzePhase((p) => (p < LINK_PHASES.length - 1 ? p + 1 : p));
+    }, 1500);
     try {
       const res = await fetch('/api/suggest', {
         method: 'POST',
@@ -246,6 +269,7 @@ function WizardShell() {
       if (!res.ok || !data.ok || !data.brief) {
         toast(data?.message || 'Não foi possível analisar o site.');
         setAnalyzing(false);
+        setAnalyzePhase(-1);
         return;
       }
       const brief: Brief = { ...emptyBrief, ...data.brief };
@@ -255,7 +279,9 @@ function WizardShell() {
     } catch {
       toast('Falha de conexão ao analisar o site.');
     } finally {
+      window.clearInterval(phaseTick);
       setAnalyzing(false);
+      setAnalyzePhase(-1);
     }
   }
 
@@ -475,16 +501,24 @@ function WizardShell() {
         <p className="step-sub">A Curta analisa a página e sugere um brief de partida (produto, público, tom, CTA...). Sem link? Preencha o brief manualmente.</p>
         <label className="field">
           <span className="l">Link do site</span>
-          <input type="url" id="input-link" placeholder="https://seusite.com.br" defaultValue={wiz.link} />
+          <input type="url" id="input-link" placeholder="https://seusite.com.br" defaultValue={wiz.link} disabled={analyzing} />
         </label>
         <div className="link-actions">
           <button className="btn btn-primary" onClick={analyzeLink} disabled={analyzing}>
-            {analyzing ? 'Analisando site...' : 'Analisar site'}
+            {analyzing && <span className="spinner" aria-hidden="true" />}
+            {analyzing ? 'Analisando site…' : 'Analisar site'}
           </button>
-          <button className="btn btn-ghost" onClick={() => goToStep(WIZ_STEPS.findIndex((s) => s.key === 'brief'))}>
+          <button className="btn btn-ghost" onClick={() => goToStep(WIZ_STEPS.findIndex((s) => s.key === 'brief'))} disabled={analyzing}>
             Preencher brief manualmente
           </button>
         </div>
+        {analyzing && (
+          <div className="link-phase-line">
+            <span className="spinner" aria-hidden="true" />
+            {analyzePhase >= 0 ? LINK_PHASES[analyzePhase] : 'Preparando…'}
+          </div>
+        )}
+        {analyzing && <div className="await-card">Isso costuma levar <b>~10 segundos</b>. Aguarde enquanto analisamos o site — não é preciso fazer mais nada.</div>}
       </div>
 
       {/* Step 3: Brief */}
@@ -493,26 +527,39 @@ function WizardShell() {
         <h2 className="step-title">Brief do vídeo</h2>
         <p className="step-sub">Revise os campos abaixo antes de gerar o roteiro. Se vier de um link, ajuste o que parecer errado.</p>
         <div className="brief-grid">
-          {BRIEF_FIELDS.map((f) => (
+          {BRIEF_FIELDS.map((f) => {
+            const isReq = f.key === 'produto' || f.key === 'cta';
+            const showErr = isReq && briefAttempted && !wiz.brief[f.key].trim();
+            return (
             <label className="field" key={f.key}>
               <span className="l">{f.label}</span>
               {f.area ? (
                 <textarea
+                  className={showErr ? 'is-invalid' : undefined}
                   placeholder={f.placeholder}
                   value={wiz.brief[f.key]}
-                  onChange={(e) => setWiz((w) => ({ ...w, brief: { ...w.brief, [f.key]: e.target.value } }))}
+                  onChange={(e) => {
+                    setWiz((w) => ({ ...w, brief: { ...w.brief, [f.key]: e.target.value } }));
+                    if (isReq && e.target.value.trim()) setBriefAttempted(false);
+                  }}
                 />
               ) : (
                 <input
                   type="text"
+                  className={showErr ? 'is-invalid' : undefined}
                   placeholder={f.placeholder}
                   value={wiz.brief[f.key]}
-                  onChange={(e) => setWiz((w) => ({ ...w, brief: { ...w.brief, [f.key]: e.target.value } }))}
+                  onChange={(e) => {
+                    setWiz((w) => ({ ...w, brief: { ...w.brief, [f.key]: e.target.value } }));
+                    if (isReq && e.target.value.trim()) setBriefAttempted(false);
+                  }}
                 />
               )}
             </label>
-          ))}
+            );
+          })}
         </div>
+        <p className="continue-hint">Ao continuar, vamos gerar o roteiro na próxima etapa — costuma levar <b>~20 segundos</b>. Acompanhe o progresso na tela.</p>
       </div>
 
       {/* Step 4: Gerando */}
