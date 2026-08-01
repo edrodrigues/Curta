@@ -14,6 +14,11 @@ export function supabaseAdmin(): SupabaseClient {
       "SUPABASE_SERVICE_ROLE_KEY ausente. Defina-a em .env.local (server-only)."
     );
   }
+  if (key.length < 40) {
+    throw new Error(
+      "SUPABASE_SERVICE_ROLE_KEY parece inválida (valor muito curto). Copie a service role key (ou secret key) em Project Settings > API no painel do Supabase."
+    );
+  }
   _admin = createClient(url, key, {
     auth: { persistSession: false, autoRefreshToken: false },
   });

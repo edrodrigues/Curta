@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 120;
 
 const FN_URL =
   "https://olnrqblgsyyxmtubdoez.functions.supabase.co/assemble-video";
@@ -67,9 +68,14 @@ export async function POST(req: NextRequest) {
     (typeof data.project_id === "string" && data.project_id) || randomToken();
 
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!serviceKey) {
+  if (!serviceKey || serviceKey.length < 40) {
     return NextResponse.json(
-      { ok: false, message: "SUPABASE_SERVICE_ROLE_KEY ausente." },
+      {
+        ok: false,
+        message: !serviceKey
+          ? "SUPABASE_SERVICE_ROLE_KEY ausente."
+          : "SUPABASE_SERVICE_ROLE_KEY parece inválida (valor muito curto). Copie a service role key (ou secret key) em Project Settings > API no painel do Supabase.",
+      },
       { status: 503 }
     );
   }

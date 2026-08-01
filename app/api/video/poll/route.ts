@@ -4,6 +4,7 @@ import { supabaseAdmin, VIDEO_BUCKET } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 type RunRef = { index: number; run_id: string };
 
@@ -44,12 +45,16 @@ function mapStatus(s: MonidRunStatus): "pendente" | "rodando" | "concluido" | "f
 async function uploadClip(
   run_id: string,
   download_url: string
-): Promise<string | null> {
+): Promise<{ key: string | null; error?: string }> {
   try {
     const res = await fetch(download_url, { cache: "no-store" });
-    if (!res.ok || !res.body) return null;
+    if (!res.ok || !res.body) {
+      return { key: null, error: `Download do clipe falhou (HTTP ${res.status}).` };
+    }
     const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.length === 0) return null;
+    if (buf.length === 0) {
+      return { key: null, error: "Clipe baixado veio vazio." };
+    }
     const key = `clips/${run_id}.mp4`;
     const admin = supabaseAdmin();
     const { error } = await admin.storage
@@ -58,10 +63,15 @@ async function uploadClip(
         contentType: "video/mp4",
         upsert: true,
       });
-    if (error) return null;
-    return key;
-  } catch {
-    return null;
+    if (error) {
+      console.error(`[video/poll] upload falhou para run ${run_id}:`, error.message);
+      return { key: null, error: `Upload ao Supabase falhou: ${error.message}` };
+    }
+    return { key };
+  } catch (e) {
+    const message = (e as Error).message || "Erro desconhecido.";
+    console.error(`[video/poll] uploadClip falhou para run ${run_id}:`, message);
+    return { key: null, error: message };
   }
 }
 
@@ -92,13 +102,13 @@ export async function POST(req: NextRequest) {
         let clip_url: string | undefined = undefined;
         if (status === "concluido" && res.download_url) {
           const saved = await uploadClip(r.run_id, res.download_url);
-          if (saved) clip_url = saved;
+          if (saved.key) clip_url = saved.key;
           else {
             return {
               index: r.index,
               run_id: r.run_id,
               status: "falhou" as const,
-              error: "Não foi possível baixar e armazenar o clipe gerado.",
+              error: saved.error || "Não foi possível baixar e armazenar o clipe gerado.",
             };
           }
         }

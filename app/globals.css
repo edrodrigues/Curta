@@ -564,8 +564,16 @@ label.field .l { display: block; font-family: var(--font-mono); font-size: var(-
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 
 /* ===== VIDEO PREVIEW (STEP 7) ===== */
-.video-cost-est { font-family: var(--font-mono); font-size: var(--step--1); color: var(--text-dim); margin-bottom: 0.85rem; }
-.video-cost-est b { color: var(--amber); font-weight: 700; }
+.video-eta {
+  display: inline-flex; align-items: center; gap: 0.9rem; padding: 0.7rem 1rem; margin-bottom: 0.85rem;
+  background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--radius-m);
+}
+.video-eta-ring { width: 3rem; height: 3rem; flex-shrink: 0; }
+.video-eta-ring circle { fill: none; stroke-width: 3.5; }
+.video-eta-ring .track { stroke: var(--border); }
+.video-eta-ring .bar { stroke: var(--amber); stroke-linecap: round; transform: rotate(-90deg); transform-origin: 50% 50%; transition: stroke-dashoffset 1s linear; }
+.video-eta-label { font-size: var(--step--1); color: var(--text-dim); margin: 0; }
+.video-eta-time { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-size: var(--step-1); font-weight: 700; color: var(--amber); margin: 0.1rem 0 0; }
 
 .scene-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr)); gap: 0.85rem; margin-bottom: 1.25rem; }
 .scene-card {

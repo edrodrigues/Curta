@@ -4,6 +4,7 @@ import type { VideoDuration, VideoResolution } from "@/lib/monid/client";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 const MAX_CENAS = 12;
 

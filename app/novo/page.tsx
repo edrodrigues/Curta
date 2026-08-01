@@ -36,6 +36,9 @@ const WIZ_STEPS: { key: string; label: string }[] = [
   { key: 'exportar', label: 'Exportar' },
 ];
 
+const SCENE_ETA_SECONDS = 180;
+const ASSEMBLE_ETA_SECONDS = 45;
+
 const SERVICE_LOGOS: Record<'YouTube' | 'Instagram' | 'LinkedIn', JSX.Element> = {
   YouTube: (
     <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -120,6 +123,16 @@ function slug(s: string): string {
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/(^-|-$)/g, '') || 'video'
   );
+}
+
+function formatEta(secs: number): string {
+  const s = Math.max(0, Math.floor(secs));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  const mm = String(m).padStart(2, '0');
+  const ss = String(sec).padStart(2, '0');
+  return h > 0 ? `${h}:${mm}:${ss}` : `${m}:${ss}`;
 }
 
 function buildSrt(project: Project): string {
@@ -245,6 +258,10 @@ function WizardShell() {
   const [dbProjectId, setDbProjectId] = useState<string | null>(null);
   const ensureDraftRef = useRef(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const videoStartedAtRef = useRef<number | null>(null);
+  const [etaSeconds, setEtaSeconds] = useState<number | null>(null);
+  const etaAnchorRef = useRef<{ at: number; value: number } | null>(null);
+  const lastEtaKeyRef = useRef('');
 
   useEffect(() => {
     if (!projectIdParam) { setLoadingProject(false); return; }
@@ -393,6 +410,9 @@ function WizardShell() {
       status: 'pendente',
     }));
     setWiz((w) => ({ ...w, sceneRenders: seed, finalVideoUrl: null, videoStage: 'running', videoCostEstimateUsd: null }));
+    videoStartedAtRef.current = Date.now();
+    etaAnchorRef.current = null;
+    lastEtaKeyRef.current = '';
 
     goToStep(stepIndex + 1);
 
@@ -670,6 +690,47 @@ function WizardShell() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, wiz.videoStage, wiz.sceneRenders]);
+
+  useEffect(() => {
+    if (key !== 'preview-video' || wiz.videoStage === 'idle' || wiz.videoStage === 'done' || wiz.videoStage === 'error') {
+      setEtaSeconds(null);
+      etaAnchorRef.current = null;
+      lastEtaKeyRef.current = '';
+      return;
+    }
+    const remaining = wiz.sceneRenders.filter((s) => s.status === 'pendente' || s.status === 'rodando').length;
+    const done = wiz.sceneRenders.filter((s) => s.status === 'concluido').length;
+    const progressKey = `${wiz.videoStage}|${done}|${remaining}`;
+    if (progressKey === lastEtaKeyRef.current && etaAnchorRef.current) return;
+    lastEtaKeyRef.current = progressKey;
+    let target: number;
+    if (wiz.videoStage === 'assembling') {
+      target = ASSEMBLE_ETA_SECONDS;
+    } else {
+      let perScene = SCENE_ETA_SECONDS;
+      if (done > 0 && videoStartedAtRef.current) {
+        const avg = (Date.now() - videoStartedAtRef.current) / 1000 / done;
+        perScene = Math.min(600, Math.max(60, Math.round(avg)));
+      }
+      target = remaining * perScene;
+    }
+    etaAnchorRef.current = { at: Date.now(), value: target };
+    setEtaSeconds(target);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, wiz.videoStage, wiz.sceneRenders]);
+
+  useEffect(() => {
+    if (key !== 'preview-video' || (wiz.videoStage !== 'running' && wiz.videoStage !== 'assembling')) return;
+    const id = window.setInterval(() => {
+      setEtaSeconds((prev) => {
+        const a = etaAnchorRef.current;
+        if (prev == null || !a) return prev;
+        return Math.max(0, a.value - Math.floor((Date.now() - a.at) / 1000));
+      });
+    }, 1000);
+    return () => window.clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, wiz.videoStage]);
 
   function startGeneration() {
     const cost = wiz.duration === 60 ? 2 : 1;
@@ -1055,7 +1116,7 @@ function WizardShell() {
       <div className={`step-panel wide${key === 'preview-video' ? ' is-active' : ''}`} data-step="preview-video">
         <p className="eyebrow step-eyebrow">{eyebrowText}</p>
         <h2 className="step-title">Prévia do vídeo</h2>
-        <p className="step-sub">Gerando um clipe por cena com MiniMax·Hailuo-2.3 via Monid e montando o vídeo final. Cada cena pode levar alguns minutos.</p>
+        <p className="step-sub">Gerando um clipe por cena e montando o vídeo final. Cada cena pode levar alguns minutos.</p>
 
         {(() => {
           const renders = wiz.sceneRenders;
@@ -1076,12 +1137,22 @@ function WizardShell() {
                     ? 'Falha na geração'
                     : 'Aguardando início…';
 
+          const etaTotal = etaAnchorRef.current?.value ?? etaSeconds ?? 0;
+          const etaPct = etaTotal > 0 && etaSeconds != null ? Math.min(1, Math.max(0, etaSeconds / etaTotal)) : 0;
+
           return (
           <>
-            {wiz.videoCostEstimateUsd != null && (
-              <p className="video-cost-est">
-                Custo estimado: <b>${wiz.videoCostEstimateUsd.toFixed(2)}</b> · MiniMax Hailuo-2.3
-              </p>
+            {etaSeconds != null && (
+              <div className="video-eta" role="timer" aria-live="polite" aria-label={`Tempo estimado restante: ${formatEta(etaSeconds)}`}>
+                <svg className="video-eta-ring" viewBox="0 0 36 36" aria-hidden="true" focusable="false">
+                  <circle className="track" cx="18" cy="18" r="15.9155" />
+                  <circle className="bar" cx="18" cy="18" r="15.9155" strokeDasharray="100" strokeDashoffset={100 - etaPct * 100} />
+                </svg>
+                <div>
+                  <p className="video-eta-label">Tempo estimado até o fim da geração</p>
+                  <p className="video-eta-time">{formatEta(etaSeconds)}</p>
+                </div>
+              </div>
             )}
 
             {total > 0 && (
@@ -1119,7 +1190,7 @@ function WizardShell() {
             {failed > 0 && total > 0 && failed === total && (
               <div className="roteiro-aviso" style={{ marginTop: '1.25rem' }}>
                 <p className="eyebrow">Erro</p>
-                <p>Todas as cenas falharam na geração. Verifique o saldo da Monid e tente novamente.</p>
+                <p>Todas as cenas falharam na geração. Veja as mensagens de erro de cada cena acima para o motivo (créditos da Monid, credenciais do Supabase, etc.) e tente novamente.</p>
               </div>
             )}
 
