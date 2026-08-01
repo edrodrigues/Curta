@@ -1,19 +1,49 @@
+'use client';
+
 import Link from 'next/link';
+import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { CanvasThumb } from '@/components/Canvas';
+import { useStore } from '@/lib/store';
 
 export default function HomePage() {
+  const router = useRouter();
+  const store = useStore();
+  const [url, setUrl] = useState('');
+
+  function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const raw = url.trim();
+    if (!raw) return;
+    const target = store.hydrated && store.loggedIn ? '/novo' : '/criar-conta';
+    router.push(target + '?url=' + encodeURIComponent(raw));
+  }
+
   return (
     <div className="screen is-active" id="screen-home">
       <div className="container hero">
         <div className="hero-grid">
           <div>
-            <p className="eyebrow">Vídeos explicativos por IA</p>
-            <h1>Sua ideia vira <em>curta</em> em minutos.</h1>
-            <p className="lede">Escreva um roteiro simples e a Curta gera um vídeo animado de 30 ou 60 segundos, com narração e trilha sonora feitas por inteligência artificial — prontas para postar.</p>
-            <div className="hero-ctas">
-              <Link className="btn btn-primary btn-lg" href="/criar-conta">Criar meu primeiro vídeo</Link>
-              <Link className="btn btn-ghost btn-lg" href="/#como-funciona">Ver como funciona</Link>
-            </div>
+            <p className="eyebrow">De URL para vídeo, por IA</p>
+            <h1>Cole o link. Vira <em>curta</em> em minutos.</h1>
+            <p className="lede">A Curta lê o seu site e gera um vídeo animado de 30 ou 60 segundos — com narração e trilha sonora feitas por inteligência artificial, pronto para postar.</p>
+            <form className="hero-form" onSubmit={onSubmit}>
+              <label className="field">
+                <span className="l">Link do site</span>
+                <input
+                  type="url"
+                  name="site"
+                  placeholder="https://seusite.com.br"
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  required
+                />
+              </label>
+              <div className="link-actions">
+                <button className="btn btn-primary btn-lg" type="submit">Criar vídeo</button>
+                <Link className="btn btn-ghost btn-lg" href="/#como-funciona">Ver como funciona</Link>
+              </div>
+            </form>
             <p className="hero-meta">Sem mensalidade · pague por vídeo · a partir de R$ 25</p>
           </div>
           <div className="filmcard" aria-hidden="true">
@@ -28,10 +58,10 @@ export default function HomePage() {
           <div className="band-head">
             <p className="eyebrow">Como funciona</p>
             <h2>Quatro passos até o vídeo pronto</h2>
-            <p>Sem edição manual, sem estúdio de gravação. Você escreve, a Curta produz.</p>
+            <p>Sem edição manual, sem estúdio de gravação. Você cola o link, a Curta produz.</p>
           </div>
           <div className="flow">
-            <div className="flow-step"><div className="num">1</div><h3>Roteiro</h3><p>Escreva ou cole o texto que quer explicar.</p></div>
+            <div className="flow-step"><div className="num">1</div><h3>Link</h3><p>Cole o link do site. A Curta lê a página e monta o brief.</p></div>
             <div className="flow-step"><div className="num">2</div><h3>Estilo</h3><p>Escolha a voz da narração e o clima da trilha.</p></div>
             <div className="flow-step"><div className="num">3</div><h3>Prévia</h3><p>Veja um rascunho do vídeo e do áudio antes de gerar.</p></div>
             <div className="flow-step"><div className="num">4</div><h3>Exportar</h3><p>Gere o vídeo final e baixe pronto para publicar.</p></div>

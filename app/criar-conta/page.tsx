@@ -1,13 +1,24 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useStore, useToast } from '@/lib/store';
 
 export default function CriarContaPage() {
+  return (
+    <Suspense fallback={null}>
+      <CriarContaForm />
+    </Suspense>
+  );
+}
+
+function CriarContaForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const store = useStore();
   const { toast } = useToast();
+  const url = searchParams.get('url');
 
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -16,14 +27,16 @@ export default function CriarContaPage() {
     const email = (form.elements.namedItem('email') as HTMLInputElement).value.trim();
     store.login(nome || 'Você', email);
     toast('Bem-vindo(a), ' + (nome || 'Você') + '!');
-    router.push('/painel');
+    router.push(url ? '/novo?url=' + encodeURIComponent(url) : '/painel');
   }
+
+  const entrarHref = url ? '/entrar?url=' + encodeURIComponent(url) : '/entrar';
 
   return (
     <div className="auth-shell">
       <div className="auth-card">
         <div className="auth-switch">
-          <Link href="/entrar">Entrar</Link>
+          <Link href={entrarHref}>Entrar</Link>
           <Link href="/criar-conta" className="is-active">Criar conta</Link>
         </div>
         <h2>Criar sua conta</h2>

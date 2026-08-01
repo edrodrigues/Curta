@@ -209,6 +209,9 @@ main { min-height: calc(100vh - 64px); }
 .hero .lede { font-size: var(--step-1); color: var(--text-dim); margin-top: 1.1rem; max-width: 34em; }
 .hero-ctas { display: flex; gap: 0.85rem; margin-top: 1.8rem; flex-wrap: wrap; }
 .hero-meta { margin-top: 1.5rem; font-family: var(--font-mono); font-size: var(--step--1); color: var(--text-faint); }
+.hero-form { margin-top: 1.8rem; }
+.hero-form .field { margin-bottom: 1rem; }
+.hero-form .link-actions { align-items: center; }
 
 .filmcard {
   aspect-ratio: 4/3; border-radius: var(--radius-m); background: var(--ink);
@@ -379,6 +382,28 @@ footer.site-footer { border-top: 1px solid var(--border); padding: 2.5rem 0; }
 .dur-card.is-selected { border-color: var(--accent); }
 .dur-card:hover { border-color: var(--text-faint); }
 .dur-card.is-selected:hover { border-color: var(--accent); }
+
+.fmt-group { margin-bottom: 1.75rem; }
+.fmt-group-title {
+  font-family: var(--font-mono); font-size: var(--step--1); letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--text-dim); margin-bottom: 0.75rem;
+}
+.fmt-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 1rem; }
+@media (max-width: 620px) { .fmt-grid { grid-template-columns: 1fr; } }
+.fmt-card {
+  border: 2px solid var(--border); border-radius: var(--radius-m); padding: 1.15rem;
+  text-align: left; cursor: pointer; background: var(--bg-raised); position: relative;
+}
+.fmt-card.is-selected { border-color: var(--accent); }
+.fmt-card:hover { border-color: var(--text-faint); }
+.fmt-card.is-selected:hover { border-color: var(--accent); }
+.fmt-title { font-weight: var(--weight-bold); margin-bottom: 0.4rem; }
+.fmt-aspect {
+  font-family: var(--font-mono); font-size: var(--step--1); color: var(--text-dim);
+  margin-bottom: 0.6rem;
+}
+.fmt-res { color: var(--text-faint); margin-left: 0.4rem; }
+.fmt-desc { font-size: var(--step--1); color: var(--text-dim); max-width: 32em; margin: 0; }
 
 label.field { display: block; margin-bottom: 1.5rem; }
 label.field .l { display: block; font-family: var(--font-mono); font-size: var(--step--1); letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-dim); margin-bottom: 0.5rem; }

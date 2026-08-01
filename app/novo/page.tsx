@@ -9,17 +9,20 @@ import {
   matchTrack,
   TRACKS,
   TRACK_AUDIO_URLS,
+  VIDEO_FORMATS,
   type Brief,
   type Project,
   type RoteiroOutput,
   type WizardData,
 } from '@/lib/types';
 import { useStore, useToast } from '@/lib/store';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Suspense } from 'react';
 import { RequireAuth } from '@/lib/RequireAuth';
 
 const WIZ_STEPS: { key: string; label: string }[] = [
   { key: 'duracao', label: 'Duração' },
+  { key: 'formato', label: 'Formato' },
   { key: 'link', label: 'Link' },
   { key: 'brief', label: 'Brief' },
   { key: 'gerando', label: 'Gerando' },
@@ -64,6 +67,7 @@ const BRIEF_FIELDS: { key: keyof Brief; label: string; placeholder: string; area
 const initialWiz: WizardData = {
   link: '',
   duration: null,
+  videoFormat: null,
   brief: { ...emptyBrief },
   roteiro: null,
 };
@@ -172,19 +176,23 @@ function renderMarkdownTable(md: string): string {
 export default function NovoPage() {
   return (
     <RequireAuth>
-      <div className="container wizard-shell">
-        <WizardShell />
-      </div>
+      <Suspense fallback={null}>
+        <div className="container wizard-shell">
+          <WizardShell />
+        </div>
+      </Suspense>
     </RequireAuth>
   );
 }
 
 function WizardShell() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const store = useStore();
   const { toast } = useToast();
+  const pendingUrl = searchParams.get('url') || '';
   const [stepIndex, setStepIndex] = useState(0);
-  const [wiz, setWiz] = useState<WizardData>(initialWiz);
+  const [wiz, setWiz] = useState<WizardData>(() => ({ ...initialWiz, link: pendingUrl }));
   const [stage, setStage] = useState<Stage>('idle');
   const [generating, setGenerating] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
@@ -193,6 +201,7 @@ function WizardShell() {
   const [roteiroStageIdx, setRoteiroStageIdx] = useState(0);
   const [progress, setProgress] = useState(0);
   const [lastProject, setLastProject] = useState<Project | null>(null);
+  const [autoAnalyzed, setAutoAnalyzed] = useState(false);
 
   const key = WIZ_STEPS[stepIndex].key;
 
@@ -206,6 +215,10 @@ function WizardShell() {
   function validateStep(): boolean {
     if (key === 'duracao' && !wiz.duration) {
       toast('Escolha uma duração para continuar.');
+      return false;
+    }
+    if (key === 'formato' && !wiz.videoFormat) {
+      toast('Escolha um formato de vídeo para continuar.');
       return false;
     }
     if (key === 'brief') {
@@ -345,6 +358,14 @@ function WizardShell() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
 
+  useEffect(() => {
+    if (key === 'link' && pendingUrl && !autoAnalyzed && !analyzing) {
+      setAutoAnalyzed(true);
+      void analyzeLink();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, pendingUrl, autoAnalyzed, analyzing]);
+
   function startGeneration() {
     const cost = wiz.duration === 60 ? 2 : 1;
     if (store.credits < cost) {
@@ -382,6 +403,7 @@ function WizardShell() {
       roteiro: roteiro.narracao_texto,
       tabela_md: roteiro.tabela_md,
       duracao: wiz.duration || 30,
+      videoFormat: wiz.videoFormat ?? undefined,
       estiloId: styleObj.id,
       estiloNome: styleObj.nome,
       trilhaNome,
@@ -503,7 +525,32 @@ function WizardShell() {
         </div>
       </div>
 
-      {/* Step 2: Link */}
+      {/* Step 2: Formato */}
+      <div className={`step-panel${key === 'formato' ? ' is-active' : ''}`} data-step="formato">
+        <p className="eyebrow step-eyebrow">{eyebrowText}</p>
+        <h2 className="step-title">Qual o formato do vídeo?</h2>
+        <p className="step-sub">Escolha a plataforma e a proporção ideais para onde o vídeo será publicado.</p>
+        {(['YouTube', 'Instagram', 'LinkedIn'] as const).map((grupo) => (
+          <div key={grupo} className="fmt-group">
+            <p className="fmt-group-title">{grupo}</p>
+            <div className="fmt-grid">
+              {VIDEO_FORMATS.filter((f) => f.grupo === grupo).map((f) => (
+                <button
+                  key={f.key}
+                  className={`fmt-card${wiz.videoFormat === f.key ? ' is-selected' : ''}`}
+                  onClick={() => setWiz((w) => ({ ...w, videoFormat: f.key }))}
+                >
+                  <p className="fmt-title">{f.titulo}</p>
+                  <p className="fmt-aspect">{f.aspecto} <span className="fmt-res">{f.resolucao}</span></p>
+                  <p className="fmt-desc">{f.descricao}</p>
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Step 3: Link */}
       <div className={`step-panel${key === 'link' ? ' is-active' : ''}`} data-step="link">
         <p className="eyebrow step-eyebrow">{eyebrowText}</p>
         <h2 className="step-title">Cole o link do site</h2>
@@ -530,7 +577,7 @@ function WizardShell() {
         {analyzing && <div className="await-card">Isso costuma levar <b>~10 segundos</b>. Aguarde enquanto analisamos o site — não é preciso fazer mais nada.</div>}
       </div>
 
-      {/* Step 3: Brief */}
+      {/* Step 4: Brief */}
       <div className={`step-panel wide${key === 'brief' ? ' is-active' : ''}`} data-step="brief">
         <p className="eyebrow step-eyebrow">{eyebrowText}</p>
         <h2 className="step-title">Brief do vídeo</h2>
@@ -571,7 +618,7 @@ function WizardShell() {
         <p className="continue-hint">Ao continuar, vamos gerar o roteiro na próxima etapa — costuma levar <b>~20 segundos</b>. Acompanhe o progresso na tela.</p>
       </div>
 
-      {/* Step 4: Gerando */}
+      {/* Step 5: Gerando */}
       <div className={`step-panel${key === 'gerando' ? ' is-active' : ''}`} data-step="gerando">
         <p className="eyebrow step-eyebrow">{eyebrowText}</p>
         <h2 className="step-title">Gerando roteiro</h2>
@@ -600,7 +647,7 @@ function WizardShell() {
         </div>
       </div>
 
-      {/* Step 5: Roteiro */}
+      {/* Step 6: Roteiro */}
       <div className={`step-panel wide${key === 'roteiro' ? ' is-active' : ''}`} data-step="roteiro">
         <p className="eyebrow step-eyebrow">{eyebrowText}</p>
         <h2 className="step-title">Roteiro gerado</h2>
@@ -680,7 +727,7 @@ function WizardShell() {
         </div>
       </div>
 
-      {/* Step 6: Preview vídeo */}
+      {/* Step 7: Preview vídeo */}
       <div className={`step-panel${key === 'preview-video' ? ' is-active' : ''}`} data-step="preview-video">
         <p className="eyebrow step-eyebrow">{eyebrowText}</p>
         <h2 className="step-title">Prévia do vídeo</h2>
@@ -696,7 +743,7 @@ function WizardShell() {
         </div>
       </div>
 
-      {/* Step 7: Preview áudio */}
+      {/* Step 8: Preview áudio */}
       <div className={`step-panel${key === 'preview-audio' ? ' is-active' : ''}`} data-step="preview-audio">
         <p className="eyebrow step-eyebrow">{eyebrowText}</p>
         <h2 className="step-title">Prévia do áudio</h2>
@@ -704,7 +751,7 @@ function WizardShell() {
         {key === 'preview-audio' && <AudioPreview trackName={trackName} />}
       </div>
 
-      {/* Step 8: Exportar */}
+      {/* Step 9: Exportar */}
       <div className={`step-panel${key === 'exportar' ? ' is-active' : ''}`} data-step="exportar">
         <p className="eyebrow step-eyebrow">{eyebrowText}</p>
         <h2 className="step-title">Gerar e exportar</h2>

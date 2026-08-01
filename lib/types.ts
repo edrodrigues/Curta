@@ -1,11 +1,89 @@
 export type ProjectStatus = 'rascunho' | 'processando' | 'pronto' | 'erro';
 
+export type VideoFormatKey =
+  | 'yt-long'
+  | 'yt-shorts'
+  | 'ig-reels'
+  | 'ig-feed-45'
+  | 'ig-feed-11'
+  | 'li-vertical'
+  | 'li-horizontal';
+
+export type VideoFormat = {
+  key: VideoFormatKey;
+  grupo: 'YouTube' | 'Instagram' | 'LinkedIn';
+  titulo: string;
+  aspecto: string;
+  resolucao: string;
+  descricao: string;
+};
+
+export const VIDEO_FORMATS: VideoFormat[] = [
+  {
+    key: 'yt-long',
+    grupo: 'YouTube',
+    titulo: 'Vídeos Longos (Padrão)',
+    aspecto: '16:9',
+    resolucao: '1920×1080 px',
+    descricao: 'Ideal para tutoriais, vlogs, entrevistas e conteúdos aprofundados.',
+  },
+  {
+    key: 'yt-shorts',
+    grupo: 'YouTube',
+    titulo: 'YouTube Shorts',
+    aspecto: '9:16',
+    resolucao: '1080×1920 px',
+    descricao: 'Vertical, até 60 segundos, focado em descoberta rápida.',
+  },
+  {
+    key: 'ig-reels',
+    grupo: 'Instagram',
+    titulo: 'Reels e Stories',
+    aspecto: '9:16',
+    resolucao: '1080×1920 px',
+    descricao: 'Tela cheia vertical, essencial para o consumo móvel e alcance orgânico.',
+  },
+  {
+    key: 'ig-feed-45',
+    grupo: 'Instagram',
+    titulo: 'Feed Tradicional (Retrato)',
+    aspecto: '4:5',
+    resolucao: '1080×1350 px',
+    descricao: 'Ocupa mais tela no feed móvel em formato retrato.',
+  },
+  {
+    key: 'ig-feed-11',
+    grupo: 'Instagram',
+    titulo: 'Feed Tradicional (Quadrado)',
+    aspecto: '1:1',
+    resolucao: '1080×1080 px',
+    descricao: 'O clássico quadrado, imune ao recorte do feed.',
+  },
+  {
+    key: 'li-vertical',
+    grupo: 'LinkedIn',
+    titulo: 'Vídeo Nativo Vertical',
+    aspecto: '9:16',
+    resolucao: '1080×1920 px',
+    descricao: 'Vertical em tela cheia, para consumo móvel no feed profissional.',
+  },
+  {
+    key: 'li-horizontal',
+    grupo: 'LinkedIn',
+    titulo: 'Vídeo Nativo Horizontal',
+    aspecto: '16:9',
+    resolucao: '1920×1080 / 1080×1080 px',
+    descricao: 'Horizontal 16:9 ou quadrado 1:1, com duração recomendada de 30 ou 60 segundos para capturar a atenção no feed profissional.',
+  },
+];
+
 export type Project = {
   id: string;
   titulo: string;
   roteiro: string;
   tabela_md?: string;
   duracao: 30 | 60;
+  videoFormat?: VideoFormatKey;
   estiloId: string;
   estiloNome: string;
   trilhaNome: string;
@@ -51,6 +129,7 @@ export type RoteiroOutput = {
 export type WizardData = {
   link: string;
   duration: 30 | 60 | null;
+  videoFormat: VideoFormatKey | null;
   brief: Brief;
   roteiro: RoteiroOutput | null;
 };
