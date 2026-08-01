@@ -32,6 +32,35 @@ const WIZ_STEPS: { key: string; label: string }[] = [
   { key: 'exportar', label: 'Exportar' },
 ];
 
+const SERVICE_LOGOS: Record<'YouTube' | 'Instagram' | 'LinkedIn', JSX.Element> = {
+  YouTube: (
+    <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path fill="#FF0000" d="M23.5 6.2a3 3 0 0 0-2.1-2.1C19.5 3.5 12 3.5 12 3.5s-7.5 0-9.4.6A3 3 0 0 0 .5 6.2 31.4 31.4 0 0 0 0 12a31.4 31.4 0 0 0 .5 5.8 3 3 0 0 0 2.1 2.1c1.9.6 9.4.6 9.4.6s7.5 0 9.4-.6a3 3 0 0 0 2.1-2.1A31.4 31.4 0 0 0 24 12a31.4 31.4 0 0 0-.5-5.8Z" />
+      <path fill="#fff" d="M9.6 15.6V8.4l6.2 3.6-6.2 3.6Z" />
+    </svg>
+  ),
+  Instagram: (
+    <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <defs>
+        <radialGradient id="ig-grad" cx="30%" cy="107%" r="150%">
+        <stop offset="0%" stopColor="#FFDD55" />
+        <stop offset="10%" stopColor="#FFDD55" />
+        <stop offset="50%" stopColor="#FF543E" />
+        <stop offset="100%" stopColor="#C837AB" />
+      </radialGradient>
+    </defs>
+    <rect x="2" y="2" width="20" height="20" rx="5.5" fill="url(#ig-grad)" />
+    <circle cx="12" cy="12" r="4.5" fill="none" stroke="#fff" strokeWidth="1.8" />
+    <circle cx="17.5" cy="6.5" r="1.3" fill="#fff" />
+    </svg>
+  ),
+  LinkedIn: (
+    <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path fill="#0A66C2" d="M20.45 20.45h-3.56v-5.56c0-1.33-.02-3.04-1.85-3.04-1.85 0-2.13 1.44-2.13 2.93v5.67H9.35V9h3.42v1.56h.05c.48-.9 1.64-1.85 3.37-1.85 3.6 0 4.27 2.37 4.27 5.45v6.29ZM5.34 7.43a2.06 2.06 0 1 1 0-4.13 2.06 2.06 0 0 1 0 4.13ZM7.12 20.45H3.55V9h3.57v11.45ZM22.22 0H1.77C.8 0 0 .78 0 1.73v20.54C0 23.22.8 24 1.77 24h20.45c.98 0 1.78-.78 1.78-1.73V1.73C24 .78 23.2 0 22.22 0Z" />
+    </svg>
+  ),
+};
+
 const GEN_STAGES = [
   'Sintetizando narração (ElevenLabs via Monid)',
   'Compondo trilha sonora',
@@ -532,7 +561,10 @@ function WizardShell() {
         <p className="step-sub">Escolha a plataforma e a proporção ideais para onde o vídeo será publicado.</p>
         {(['YouTube', 'Instagram', 'LinkedIn'] as const).map((grupo) => (
           <div key={grupo} className="fmt-group">
-            <p className="fmt-group-title">{grupo}</p>
+            <p className="fmt-group-title">
+              <span className="fmt-group-logo" aria-hidden="true">{SERVICE_LOGOS[grupo]}</span>
+              <span>{grupo}</span>
+            </p>
             <div className="fmt-grid">
               {VIDEO_FORMATS.filter((f) => f.grupo === grupo).map((f) => (
                 <button

@@ -387,7 +387,9 @@ footer.site-footer { border-top: 1px solid var(--border); padding: 2.5rem 0; }
 .fmt-group-title {
   font-family: var(--font-mono); font-size: var(--step--1); letter-spacing: 0.04em;
   text-transform: uppercase; color: var(--text-dim); margin-bottom: 0.75rem;
+  display: flex; align-items: center; gap: 0.55rem;
 }
+.fmt-group-logo { display: inline-flex; flex-shrink: 0; line-height: 0; }
 .fmt-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 1rem; }
 @media (max-width: 620px) { .fmt-grid { grid-template-columns: 1fr; } }
 .fmt-card {
