@@ -1149,7 +1149,9 @@ function WizardShell() {
                   <circle className="bar" cx="18" cy="18" r="15.9155" strokeDasharray="100" strokeDashoffset={100 - etaPct * 100} />
                 </svg>
                 <div>
-                  <p className="video-eta-label">Tempo estimado até o fim da geração</p>
+                  <p className="video-eta-label">
+                    {wiz.videoStage === 'assembling' ? 'Tempo estimado até o fim da montagem' : 'Tempo estimado até o fim da geração'}
+                  </p>
                   <p className="video-eta-time">{formatEta(etaSeconds)}</p>
                 </div>
               </div>
