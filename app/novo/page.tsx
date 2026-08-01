@@ -290,11 +290,15 @@ function WizardShell() {
     setGenerating(true);
     setStage('running');
     setProgress(0);
+    setRoteiroStageIdx(0);
     let pct = 0;
     const tick = window.setInterval(() => {
-      pct = Math.min(90, pct + 8 + Math.random() * 6);
+      pct = Math.min(90, pct + 4 + Math.random() * 5);
       setProgress(Math.round(pct));
-    }, 350);
+      setRoteiroStageIdx(
+        Math.min(Math.floor((pct / 90) * ROTEIRO_STAGES.length), ROTEIRO_STAGES.length - 1)
+      );
+    }, 320);
     try {
       const res = await fetch('/api/roteiro', {
         method: 'POST',
@@ -315,6 +319,7 @@ function WizardShell() {
       const roteiro: RoteiroOutput = data.roteiro;
       setWiz((w) => ({ ...w, roteiro }));
       setProgress(100);
+      setRoteiroStageIdx(ROTEIRO_STAGES.length - 1);
       setStage('done');
       toast('Roteiro gerado.');
       window.setTimeout(() => {
@@ -457,15 +462,18 @@ function WizardShell() {
       </div>
 
       <div className="rail">
-        {WIZ_STEPS.map((s, i) => (
+        {WIZ_STEPS.map((s, i) => {
+          const isPending = (s.key === 'link' && analyzing) || (s.key === 'gerando' && generating);
+          return (
           <div
             key={s.key}
-            className={`rail-step${i < stepIndex ? ' is-done' : ''}${i === stepIndex ? ' is-current' : ''}`}
+            className={`rail-step${i < stepIndex ? ' is-done' : ''}${i === stepIndex && !isPending ? ' is-current' : ''}${isPending ? ' is-pending' : ''}`}
           >
             <span className="n">{i + 1}</span>
             <span className="l">{s.label}</span>
           </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Step 1: Duração */}
@@ -572,8 +580,22 @@ function WizardShell() {
             <div className="progress-fill" style={{ width: progress + '%' }} />
           </div>
           <p style={{ fontFamily: 'var(--font-mono)', marginTop: '0.75rem' }}>
-            {stage === 'done' ? 'Roteiro pronto. Avançando...' : 'Processando...'}
+            {stage === 'done' ? 'Roteiro pronto. Avançando…' : 'Processando…'}
           </p>
+          <div className="progress-log" style={{ marginTop: '1rem' }}>
+            {ROTEIRO_STAGES.map((s, i) => {
+              const isDone = stage === 'done' || i < roteiroStageIdx;
+              const isActive = stage !== 'done' && i === roteiroStageIdx;
+              const cls = isDone ? 'done' : isActive ? 'active' : '';
+              return (
+                <div key={s} className={cls}>
+                  {s}
+                  {isActive && <span className="thinking-dots"><i /><i /><i /></span>}
+                </div>
+              );
+            })}
+          </div>
+          <div className="await-card">Aguarde — a geração costuma levar <b>~20 segundos</b> e segue sozinha. Não é preciso clicar nada: ao concluir, você será levado ao roteiro automaticamente.</div>
         </div>
       </div>
 
