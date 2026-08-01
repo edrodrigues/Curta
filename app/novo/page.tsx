@@ -108,6 +108,7 @@ const initialWiz: WizardData = {
   roteiro: null,
   sceneRenders: [],
   finalVideoUrl: null,
+  finalVideoKey: null,
   videoStage: 'idle',
   videoCostEstimateUsd: null,
 };
@@ -275,7 +276,24 @@ function WizardShell() {
         return;
       }
       const { project, wizard, stepIndex: savedStep } = result;
-      setWiz(wizard);
+      let nextWiz = wizard;
+      if (wizard.finalVideoKey) {
+        try {
+          const signRes = await fetch('/api/video/sign', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: wizard.finalVideoKey }),
+          });
+          const signData = await signRes.json();
+          if (!cancelled && signRes.ok && signData?.ok && signData.url) {
+            nextWiz = { ...wizard, finalVideoUrl: signData.url };
+          }
+        } catch {
+          /* keep stored url if refresh fails */
+        }
+      }
+      if (cancelled) return;
+      setWiz(nextWiz);
       setStepIndex(savedStep);
       setDbProjectId(projectIdParam);
       setLastProject(project);
@@ -376,7 +394,7 @@ function WizardShell() {
       setStage('idle');
       setGenerating(false);
       setProgress(0);
-      setWiz((w) => ({ ...w, roteiro: null, sceneRenders: [], finalVideoUrl: null, videoStage: 'idle', videoCostEstimateUsd: null }));
+      setWiz((w) => ({ ...w, roteiro: null, sceneRenders: [], finalVideoUrl: null, finalVideoKey: null, videoStage: 'idle', videoCostEstimateUsd: null }));
       goToStep(stepIndex + 1);
       return;
     }
@@ -401,7 +419,7 @@ function WizardShell() {
       return;
     }
 
-    const hasDone = !!wiz.finalVideoUrl && wiz.videoStage === 'done';
+    const hasDone = wiz.videoStage === 'done' && (!!wiz.finalVideoUrl || !!wiz.finalVideoKey);
     const stageActive = wiz.videoStage === 'running' || wiz.videoStage === 'assembling';
     const hasUsableRenders =
       wiz.sceneRenders.length > 0 &&
@@ -426,7 +444,7 @@ function WizardShell() {
       status: 'pendente',
     }));
     assemblingRef.current = false;
-    setWiz((w) => ({ ...w, sceneRenders: seed, finalVideoUrl: null, videoStage: 'running', videoCostEstimateUsd: null }));
+    setWiz((w) => ({ ...w, sceneRenders: seed, finalVideoUrl: null, finalVideoKey: null, videoStage: 'running', videoCostEstimateUsd: null }));
     videoStartedAtRef.current = Date.now();
     etaAnchorRef.current = null;
     lastEtaKeyRef.current = '';
@@ -711,7 +729,12 @@ function WizardShell() {
           assemblingRef.current = false;
           return;
         }
-        setWiz((w) => ({ ...w, finalVideoUrl: data.video_url, videoStage: 'done' }));
+        setWiz((w) => ({
+          ...w,
+          finalVideoUrl: data.video_url,
+          finalVideoKey: typeof data.video_key === 'string' ? data.video_key : w.finalVideoKey,
+          videoStage: 'done',
+        }));
         videoRunningRef.current = false;
         assemblingRef.current = false;
         toast('Vídeo montado com sucesso.');

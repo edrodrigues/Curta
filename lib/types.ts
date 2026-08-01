@@ -150,6 +150,7 @@ export type WizardData = {
   roteiro: RoteiroOutput | null;
   sceneRenders: SceneRender[];
   finalVideoUrl: string | null;
+  finalVideoKey: string | null;
   videoStage: VideoStage;
   videoCostEstimateUsd: number | null;
 };

@@ -112,6 +112,15 @@ export async function POST(req: NextRequest) {
             };
           }
         }
+        if (status === "falhou") {
+          return {
+            index: r.index,
+            run_id: r.run_id,
+            status,
+            clip_url,
+            error: res.error || `Monid: ${res.status}`,
+          };
+        }
         return { index: r.index, run_id: r.run_id, status, clip_url };
       } catch (e) {
         const err =

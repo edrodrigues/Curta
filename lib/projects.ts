@@ -19,6 +19,7 @@ export type WizardState = {
   roteiro: RoteiroOutput | null;
   sceneRenders: SceneRender[];
   finalVideoUrl: string | null;
+  finalVideoKey: string | null;
   videoStage: VideoStage;
   videoCostEstimateUsd: number | null;
 };
@@ -45,6 +46,7 @@ export function wizardStateFromWizard(wiz: WizardData, stepIndex: number, extras
     roteiro: wiz.roteiro,
     sceneRenders: wiz.sceneRenders,
     finalVideoUrl: wiz.finalVideoUrl,
+    finalVideoKey: wiz.finalVideoKey,
     videoStage: wiz.videoStage,
     videoCostEstimateUsd: wiz.videoCostEstimateUsd,
   };
@@ -59,6 +61,7 @@ export function wizardFromState(ws: WizardState | null, row: ProjectsRow): { wiz
     roteiro: ws?.roteiro ?? null,
     sceneRenders: ws?.sceneRenders ?? [],
     finalVideoUrl: ws?.finalVideoUrl ?? row.video_url ?? null,
+    finalVideoKey: ws?.finalVideoKey ?? null,
     videoStage: ws?.videoStage ?? 'idle',
     videoCostEstimateUsd: ws?.videoCostEstimateUsd ?? null,
   };

@@ -103,6 +103,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       ok: true,
       video_url: dataFn.video_url,
+      video_key: `final/${project_id}.mp4`,
       expires_at: dataFn.expires_at,
     });
   } catch (e) {
