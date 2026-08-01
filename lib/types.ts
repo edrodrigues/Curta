@@ -75,6 +75,13 @@ export const STYLES = [
 
 export const TRACKS = ['Ambiente calmo', 'Corporativo', 'Upbeat', 'Cinematográfico'] as const;
 
+export const TRACK_AUDIO_URLS: Record<(typeof TRACKS)[number], string> = {
+  'Ambiente calmo': '/audio/ambiente-calmo.wav',
+  Corporativo: '/audio/corporativo.wav',
+  Upbeat: '/audio/upbeat.wav',
+  Cinematográfico: '/audio/cinematografico.wav',
+};
+
 export const PACKAGES = [
   { slug: 'bronze', credits: 5, price: 110, save: 15, featured: false },
   { slug: 'prata', credits: 10, price: 210, save: 40, featured: true },

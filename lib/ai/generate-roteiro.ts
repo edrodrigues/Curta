@@ -1,6 +1,6 @@
 import "server-only";
 import { generateText } from "ai";
-import { scriptModel } from "./client";
+import { getScriptModel } from "./client";
 import type { Brief, RoteiroOutput, RoteiroVoz } from "@/lib/types";
 
 export class GenerateRoteiroError extends Error {
@@ -245,7 +245,7 @@ export async function generateRoteiro(params: {
   let text: string;
   try {
     const result = await generateText({
-      model: scriptModel,
+      model: getScriptModel(),
       system: SYSTEM_PROMPT,
       prompt: userPrompt,
       temperature: 0.7,

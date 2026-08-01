@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { KineticPreview } from '@/components/Canvas';
 import {
   emptyBrief,
@@ -8,6 +8,7 @@ import {
   matchStyle,
   matchTrack,
   TRACKS,
+  TRACK_AUDIO_URLS,
   type Brief,
   type Project,
   type RoteiroOutput,
@@ -666,7 +667,7 @@ function WizardShell() {
               <span className="track-chip is-selected">{trackName}</span>
               <span className="roteiro-mood-source">derivado de: {roteiro?.trilha_mood || 'ambiente calmo'}</span>
             </div>
-            {key === 'roteiro' && <AudioPreview />}
+            {key === 'roteiro' && <AudioPreview trackName={trackName} />}
           </div>
         </div>
         <div className="roteiro-actions">
@@ -700,7 +701,7 @@ function WizardShell() {
         <p className="eyebrow step-eyebrow">{eyebrowText}</p>
         <h2 className="step-title">Prévia do áudio</h2>
         <p className="step-sub">Ouça o ritmo e o clima da narração sugerida.</p>
-        {key === 'preview-audio' && <AudioPreview />}
+        {key === 'preview-audio' && <AudioPreview trackName={trackName} />}
       </div>
 
       {/* Step 8: Exportar */}
@@ -772,76 +773,124 @@ function WizardShell() {
   );
 }
 
-/* ---------- audio preview (Web Audio synth) ---------- */
-function AudioPreview() {
-  const [bars, setBars] = useState<number[]>(() => Array.from({ length: 48 }, (_, i) => 15 + (i % 7) * 6));
+function formatTime(seconds: number): string {
+  if (!Number.isFinite(seconds)) return '0:00';
+  const minutes = Math.floor(seconds / 60);
+  const remaining = Math.floor(seconds % 60).toString().padStart(2, '0');
+  return `${minutes}:${remaining}`;
+}
+
+function AudioPreview({ trackName }: { trackName: string }) {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [hasError, setHasError] = useState(false);
+  const audioSrc = TRACK_AUDIO_URLS[trackName as keyof typeof TRACK_AUDIO_URLS] || TRACK_AUDIO_URLS['Ambiente calmo'];
+  const bars = [18, 28, 38, 52, 66, 44, 30, 24, 42, 58, 74, 48, 34, 26, 52, 67, 78, 48, 32, 42, 62, 72, 54, 36, 28, 48, 68, 76, 58, 40, 28, 50, 64, 74, 46, 32, 42, 58, 70, 52, 34, 26, 46, 62, 76, 56, 38, 30];
+  const progress = duration > 0 ? currentTime / duration : 0;
 
   useEffect(() => {
-    let raf = 0;
-    let active = false;
-    const animate = (durationMs: number) => {
-      const start = performance.now();
-      const arr = bars.slice();
-      const frame = (now: number) => {
-        const elapsed = now - start;
-        for (let idx = 0; idx < arr.length; idx++) {
-          const phase = elapsed / 90 + idx * 0.5;
-          const v = elapsed < durationMs ? 30 + 65 * Math.abs(Math.sin(phase)) : 20;
-          arr[idx] = v;
-        }
-        setBars(arr.slice());
-        if (elapsed < durationMs + 200) raf = requestAnimationFrame(frame);
-        else active = false;
-      };
-      if (active) return;
-      active = true;
-      raf = requestAnimationFrame(frame);
-    };
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.pause();
+    audio.currentTime = 0;
+    setIsPlaying(false);
+    setCurrentTime(0);
+    setDuration(0);
+    setHasError(false);
+  }, [audioSrc]);
 
-    const play = () => {
-      try {
-        const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-        const audioCtx: AudioContext = new Ctx();
-        if (audioCtx.state === 'suspended') audioCtx.resume();
-        const notes = [220, 262, 294, 262, 330, 294, 220, 262];
-        let t = audioCtx.currentTime;
-        notes.forEach((freq) => {
-          const osc = audioCtx.createOscillator();
-          const gain = audioCtx.createGain();
-          osc.type = 'sine';
-          osc.frequency.value = freq;
-          gain.gain.setValueAtTime(0.0001, t);
-          gain.gain.exponentialRampToValueAtTime(0.12, t + 0.03);
-          gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.32);
-          osc.connect(gain).connect(audioCtx.destination);
-          osc.start(t);
-          osc.stop(t + 0.35);
-          t += 0.28;
-        });
-        animate(notes.length * 0.28 * 1000);
-      } catch {
-        animate(2000);
-      }
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    const updateTime = () => setCurrentTime(audio.currentTime);
+    const updateDuration = () => setDuration(audio.duration);
+    const markPlaying = () => setIsPlaying(true);
+    const markPaused = () => setIsPlaying(false);
+    const finish = () => {
+      setIsPlaying(false);
+      setCurrentTime(0);
+      audio.currentTime = 0;
     };
-
-    const btn = document.getElementById('wave-play-btn');
-    if (btn) btn.addEventListener('click', play);
+    const markError = () => {
+      setIsPlaying(false);
+      setHasError(true);
+    };
+    audio.addEventListener('timeupdate', updateTime);
+    audio.addEventListener('loadedmetadata', updateDuration);
+    audio.addEventListener('play', markPlaying);
+    audio.addEventListener('pause', markPaused);
+    audio.addEventListener('ended', finish);
+    audio.addEventListener('error', markError);
     return () => {
-      if (btn) btn.removeEventListener('click', play);
-      if (raf) cancelAnimationFrame(raf);
+      audio.removeEventListener('timeupdate', updateTime);
+      audio.removeEventListener('loadedmetadata', updateDuration);
+      audio.removeEventListener('play', markPlaying);
+      audio.removeEventListener('pause', markPaused);
+      audio.removeEventListener('ended', finish);
+      audio.removeEventListener('error', markError);
     };
-  }, [bars]);
+  }, [audioSrc]);
+
+  async function togglePlay() {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (audio.paused) {
+      try {
+        setHasError(false);
+        await audio.play();
+      } catch {
+        setHasError(true);
+      }
+    } else {
+      audio.pause();
+    }
+  }
+
+  function seek(value: string) {
+    const audio = audioRef.current;
+    const nextTime = Number(value);
+    if (!audio || !Number.isFinite(nextTime)) return;
+    audio.currentTime = nextTime;
+    setCurrentTime(nextTime);
+  }
 
   return (
     <div className="wave-stage">
       <div className="wave-row">
-        <button className="wave-play" id="wave-play-btn" aria-label="Reproduzir prévia">▶</button>
-        <div className="wave-bars">
-          {bars.map((h, i) => (
-            <i key={i} style={{ height: h + '%' }} className={h > 70 ? 'is-loud' : ''} />
+        <button
+          className="wave-play"
+          type="button"
+          onClick={togglePlay}
+          aria-label={isPlaying ? 'Pausar prévia' : 'Reproduzir prévia'}
+          aria-pressed={isPlaying}
+        >
+          {isPlaying ? 'Ⅱ' : '▶'}
+        </button>
+        <div className="wave-bars" aria-hidden="true">
+          {bars.map((height, index) => (
+            <i key={index} style={{ height: `${height}%` }} className={index / bars.length < progress ? 'is-played' : ''} />
           ))}
         </div>
       </div>
+      <input
+        className="wave-progress"
+        type="range"
+        min="0"
+        max={duration || 0}
+        step="0.01"
+        value={Math.min(currentTime, duration || 0)}
+        onChange={(event) => seek(event.target.value)}
+        disabled={!duration}
+        aria-label="Posição da prévia da trilha"
+      />
+      <div className="wave-meta">
+        <span>{formatTime(currentTime)}</span>
+        <span>{formatTime(duration)}</span>
+      </div>
+      {hasError && <p className="wave-error">Não foi possível carregar esta trilha.</p>}
+      <audio ref={audioRef} src={audioSrc} preload="metadata" aria-label={`Prévia: ${trackName}`} />
     </div>
   );
 }

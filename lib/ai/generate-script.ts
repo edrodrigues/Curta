@@ -1,7 +1,7 @@
 import "server-only";
 import { generateObject } from "ai";
 import { z } from "zod";
-import { scriptModel } from "./client";
+import { getScriptModel } from "./client";
 import type { Brief } from "@/lib/types";
 
 export const briefSchema = z.object({
@@ -171,7 +171,7 @@ export async function generateBrief(params: {
 
   try {
     const { object } = await generateObject({
-      model: scriptModel,
+      model: getScriptModel(),
       schema: briefSchema,
       schemaName: "brief",
       system: buildBriefSystemPrompt(params.durationSeconds),

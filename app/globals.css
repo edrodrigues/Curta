@@ -425,8 +425,12 @@ label.field .l { display: block; font-family: var(--font-mono); font-size: var(-
   display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0;
 }
 .wave-bars { flex: 1; height: 3rem; display: flex; align-items: center; gap: 2px; overflow: hidden; }
-.wave-bars i { flex: 1; min-width: 2px; background: var(--text-faint); border-radius: 2px; height: 20%; display: block; }
-.wave-bars i.is-loud { background: var(--amber); }
+.wave-bars i { flex: 1; min-width: 2px; background: var(--text-faint); border-radius: 2px; height: 20%; display: block; transition: background 0.15s ease; }
+.wave-bars i.is-played { background: var(--amber); }
+.wave-progress { display: block; width: calc(100% - 4rem); margin: 1rem 0 0 4rem; accent-color: var(--accent); cursor: pointer; }
+.wave-progress:disabled { cursor: default; opacity: 0.55; }
+.wave-meta { display: flex; justify-content: space-between; width: calc(100% - 4rem); margin: 0.35rem 0 0 4rem; color: var(--text-faint); font-family: var(--font-mono); font-size: 0.68rem; }
+.wave-error { width: calc(100% - 4rem); margin: 0.65rem 0 0 4rem; color: var(--accent); font-family: var(--font-mono); font-size: 0.7rem; }
 
 .gerar-stage { max-width: 34rem; }
 .progress-track { height: 10px; background: var(--bg-sunken); border-radius: 100px; overflow: hidden; border: 1px solid var(--border); margin: 1.5rem 0 1rem; }
