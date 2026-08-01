@@ -44,14 +44,14 @@ function PainelContent() {
           </div>
           <div>
             {recent.map((p) => (
-              <div className="mini-project" key={p.id}>
+              <Link className="mini-project" href={`/novo?id=${p.id}`} key={p.id}>
                 <div className="mini-thumb"><CanvasThumb seedText={p.titulo} /></div>
                 <div>
                   <div className="mini-title">{p.titulo}</div>
                   <div className="mini-meta">{p.duracao}s · {p.estiloNome}</div>
                 </div>
                 <span className={`status-pill status-${p.status}`}>{statusLabel(p.status)}</span>
-              </div>
+              </Link>
             ))}
           </div>
           {recent.length === 0 && (
