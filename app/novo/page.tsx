@@ -517,7 +517,13 @@ function WizardShell() {
       const data = await res.json();
       window.clearInterval(tick);
       if (!res.ok || !data.ok || !data.roteiro) {
-        toast(data?.message || 'Falha ao gerar roteiro.');
+        const statusMsg: Record<number, string> = {
+          400: data?.message || 'Brief incompleto. Revise os dados antes de gerar.',
+          502: 'A IA não conseguiu produzir o roteiro. Tente novamente.',
+          503: 'Serviço de IA indisponível ou sem saldo. Tente novamente em instantes.',
+          500: 'Erro inesperado ao gerar roteiro. Tente novamente.',
+        };
+        toast(statusMsg[res.status] || data?.message || 'Falha ao gerar roteiro.');
         setStage('idle');
         setGenerating(false);
         return;

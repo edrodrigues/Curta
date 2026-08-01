@@ -7,6 +7,7 @@ import { emptyBrief, type Brief } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 300;
 
 const ALLOWED_DURATION: ReadonlySet<number> = new Set([30, 60]);
 

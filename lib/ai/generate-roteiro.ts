@@ -357,43 +357,50 @@ export async function generateRoteiro(params: {
   const userPrompt = fill(PROMPT_TEMPLATE, params.brief, params.durationSeconds);
 
   let text: string;
-  try {
-    const result = await generateText({
-      model: getScriptModel(),
-      system: SYSTEM_PROMPT,
-      prompt: userPrompt,
-      temperature: 0.7,
-    });
-    text = result.text;
-  } catch (e: unknown) {
-    const err = e as { statusCode?: number; message?: string };
-    const status = err?.statusCode;
-    if (status === 402) {
+  const attempts = 2;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const result = await generateText({
+        model: getScriptModel(),
+        system: SYSTEM_PROMPT,
+        prompt: userPrompt,
+        temperature: 0.7,
+        maxOutputTokens: 16000,
+        providerOptions: { openai: { reasoningEffort: "low" } },
+      });
+      text = result.text;
+    } catch (e: unknown) {
+      const err = e as { statusCode?: number; message?: string };
+      const status = err?.statusCode;
+      if (status === 402) {
+        throw new GenerateRoteiroError(
+          "Serviço de IA sem saldo. Tente novamente mais tarde.",
+          "provider",
+          status
+        );
+      }
+      if (status === 429 || status === 503) {
+        throw new GenerateRoteiroError(
+          "Serviço de IA temporariamente indisponível. Tente novamente.",
+          "provider",
+          status
+        );
+      }
       throw new GenerateRoteiroError(
-        "Serviço de IA sem saldo. Tente novamente mais tarde.",
-        "provider",
+        err?.message ?? "Falha ao gerar roteiro.",
+        "unknown",
         status
       );
     }
-    if (status === 429 || status === 503) {
-      throw new GenerateRoteiroError(
-        "Serviço de IA temporariamente indisponível. Tente novamente.",
-        "provider",
-        status
-      );
+
+    if (text && text.trim().length >= 30) {
+      return parseRoteiroOutput(text);
     }
-    throw new GenerateRoteiroError(
-      err?.message ?? "Falha ao gerar roteiro.",
-      "unknown",
-      status
-    );
+    // Resposta vazia ou curta: re-tenta uma vez antes de falhar.
   }
 
-  if (!text || text.trim().length < 30) {
-    throw new GenerateRoteiroError(
-      "Resposta do modelo vazia ou muito curta.",
-      "parse"
-    );
-  }
-  return parseRoteiroOutput(text);
+  throw new GenerateRoteiroError(
+    "Resposta do modelo vazia ou muito curta.",
+    "parse"
+  );
 }
