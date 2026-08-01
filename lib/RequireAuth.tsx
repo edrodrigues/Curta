@@ -2,18 +2,18 @@
 
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { useStore } from '@/lib/store';
+import { useAuth } from '@/lib/auth';
 
 export function RequireAuth({ children }: { children: React.ReactNode }) {
   const router = useRouter();
-  const { loggedIn, hydrated } = useStore();
+  const { user, loading } = useAuth();
 
   useEffect(() => {
-    if (hydrated && !loggedIn) {
+    if (!loading && !user) {
       router.replace('/entrar');
     }
-  }, [hydrated, loggedIn, router]);
+  }, [loading, user, router]);
 
-  if (!hydrated || !loggedIn) return null;
+  if (loading || !user) return null;
   return <>{children}</>;
 }

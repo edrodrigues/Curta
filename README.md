@@ -8,12 +8,13 @@ Este repositório contém o **app web Curta** (Next.js 14, App Router): a UI de 
 
 | Parte | Estado |
 |---|---|
-| UI web (home, auth, painel, novo projeto, projetos, créditos) | Funcional, estado em `localStorage` |
+| Auth (Supabase Auth via `@supabase/ssr`) | **Implementado** — login/registro com cookies SSR |
+| Persistência de projetos (Supabase `projects` + autosave do wizard) | **Implementado** — retomar de onde parou |
 | Sugestão de roteiro a partir de um link | **Implementado** — `POST /api/suggest` |
 | Identidade visual (Fjalla One + Lora, paleta tally-light) | Pronta |
-| Auth, persistência, créditos, pagamentos, geração de vídeo | Planejados — ver `CURTA_BUILD_GUIDE.md` |
+| Créditos, pagamentos, geração de vídeo | Planejados — ver `CURTA_BUILD_GUIDE.md` |
 
-A UI hoje roda como demonstração: login/registro, créditos e projetos são simulados no navegador (sem backend, sem cobrança, sem geração real de vídeo). A única dependência externa ativa é a geração de roteiro.
+A UI hoje roda com auth real (Supabase Auth) e persistência de projetos no Postgres (autosave do wizard + retomar de onde parou). Créditos permanecem como simulação em `localStorage` (sem cobrança, sem geração real de vídeo). A geração de roteiro é a única dependência externa ativa.
 
 ## Stack
 

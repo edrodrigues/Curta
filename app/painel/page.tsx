@@ -2,6 +2,8 @@
 
 import Link from 'next/link';
 import { useStore } from '@/lib/store';
+import { useAuth, getDisplayName } from '@/lib/auth';
+import { useProjects } from '@/lib/use-projects';
 import { statusLabel } from '@/lib/types';
 import { CanvasThumb } from '@/components/Canvas';
 import { RequireAuth } from '@/lib/RequireAuth';
@@ -16,8 +18,10 @@ export default function PainelPage() {
 
 function PainelContent() {
   const store = useStore();
-  const recent = store.projects.slice(0, 3);
-  const firstName = (store.user?.nome || '').split(' ')[0];
+  const { user } = useAuth();
+  const { projects } = useProjects();
+  const recent = projects.slice(0, 3);
+  const firstName = getDisplayName(user).split(' ')[0];
 
   return (
     <div className="container">

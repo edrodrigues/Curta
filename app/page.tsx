@@ -4,18 +4,18 @@ import Link from 'next/link';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { CanvasThumb } from '@/components/Canvas';
-import { useStore } from '@/lib/store';
+import { useAuth } from '@/lib/auth';
 
 export default function HomePage() {
   const router = useRouter();
-  const store = useStore();
+  const { user, loading } = useAuth();
   const [url, setUrl] = useState('');
 
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     const raw = url.trim();
     if (!raw) return;
-    const target = store.hydrated && store.loggedIn ? '/novo' : '/criar-conta';
+    const target = !loading && user ? '/novo' : '/criar-conta';
     router.push(target + '?url=' + encodeURIComponent(raw));
   }
 

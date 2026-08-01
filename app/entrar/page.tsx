@@ -3,7 +3,9 @@
 import Link from 'next/link';
 import { Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useStore, useToast } from '@/lib/store';
+import { useState } from 'react';
+import { useToast } from '@/lib/store';
+import { createSupabaseBrowser } from '@/lib/supabase/client';
 
 export default function EntrarPage() {
   return (
@@ -16,18 +18,30 @@ export default function EntrarPage() {
 function EntrarForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const store = useStore();
   const { toast } = useToast();
   const url = searchParams.get('url');
+  const [loading, setLoading] = useState(false);
 
-  function onSubmit(e: React.FormEvent) {
+  async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     const form = e.currentTarget as HTMLFormElement;
     const email = (form.elements.namedItem('email') as HTMLInputElement).value.trim();
-    const nome = store.user?.nome || email.split('@')[0] || 'Você';
-    store.login(nome, email);
-    toast('Bem-vindo(a), ' + nome + '!');
-    router.push(url ? '/novo?url=' + encodeURIComponent(url) : '/painel');
+    const password = (form.elements.namedItem('senha') as HTMLInputElement).value;
+    setLoading(true);
+    try {
+      const supabase = createSupabaseBrowser();
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) {
+        toast(error.message);
+        setLoading(false);
+        return;
+      }
+      toast('Bem-vindo(a) de volta!');
+      router.push(url ? '/novo?url=' + encodeURIComponent(url) : '/painel');
+    } catch {
+      toast('Falha de conexão. Tente novamente.');
+      setLoading(false);
+    }
   }
 
   const criarHref = url ? '/criar-conta?url=' + encodeURIComponent(url) : '/criar-conta';
@@ -50,9 +64,10 @@ function EntrarForm() {
             <span className="l">Senha</span>
             <input type="password" name="senha" placeholder="••••••••" required />
           </label>
-          <button className="btn btn-primary btn-block" type="submit">Entrar</button>
+          <button className="btn btn-primary btn-block" type="submit" disabled={loading}>
+            {loading ? 'Entrando…' : 'Entrar'}
+          </button>
         </form>
-        <p className="auth-note">Demonstração: qualquer e-mail e senha são aceitos. Nenhum dado é enviado a um servidor.</p>
       </div>
     </div>
   );

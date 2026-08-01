@@ -21,6 +21,8 @@ import { useStore, useToast } from '@/lib/store';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
 import { RequireAuth } from '@/lib/RequireAuth';
+import { loadProject, createProject, updateProject, updateProjectStatus } from '@/lib/projects';
+import { useAuth } from '@/lib/auth';
 
 const WIZ_STEPS: { key: string; label: string }[] = [
   { key: 'duracao', label: 'Duração' },
@@ -225,7 +227,9 @@ function WizardShell() {
   const searchParams = useSearchParams();
   const store = useStore();
   const { toast } = useToast();
+  const { user } = useAuth();
   const pendingUrl = searchParams.get('url') || '';
+  const projectIdParam = searchParams.get('id');
   const [stepIndex, setStepIndex] = useState(0);
   const [wiz, setWiz] = useState<WizardData>(() => ({ ...initialWiz, link: pendingUrl }));
   const [stage, setStage] = useState<Stage>('idle');
@@ -237,6 +241,77 @@ function WizardShell() {
   const [progress, setProgress] = useState(0);
   const [lastProject, setLastProject] = useState<Project | null>(null);
   const [autoAnalyzed, setAutoAnalyzed] = useState(false);
+  const [loadingProject, setLoadingProject] = useState(!!projectIdParam);
+  const [dbProjectId, setDbProjectId] = useState<string | null>(null);
+  const ensureDraftRef = useRef(false);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!projectIdParam) { setLoadingProject(false); return; }
+    let cancelled = false;
+    (async () => {
+      const result = await loadProject(projectIdParam);
+      if (cancelled) return;
+      if (!result) {
+        toast('Projeto não encontrado.');
+        router.replace('/projetos');
+        return;
+      }
+      const { project, wizard, stepIndex: savedStep } = result;
+      setWiz(wizard);
+      setStepIndex(savedStep);
+      setDbProjectId(projectIdParam);
+      setLastProject(project);
+      setLoadingProject(false);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectIdParam]);
+
+  function buildExtras() {
+    const roteiro = wiz.roteiro;
+    const styleObj = roteiro ? matchStyle(roteiro.voz.estilo) : { id: '', nome: '' };
+    const trilhaNome = roteiro ? matchTrack(roteiro.trilha_mood) : TRACKS[0];
+    return {
+      estiloId: styleObj.id,
+      estiloNome: styleObj.nome,
+      trilhaNome,
+      tabela_md: roteiro?.tabela_md ?? '',
+      titulo: wiz.brief.produto,
+    };
+  }
+
+  async function ensureDraft() {
+    if (dbProjectId || ensureDraftRef.current || !user) return;
+    ensureDraftRef.current = true;
+    const id = await createProject(user.id, {
+      wizard: wiz,
+      stepIndex,
+      extras: buildExtras(),
+    });
+    if (id) {
+      setDbProjectId(id);
+    } else {
+      toast('Não foi possível criar o rascunho.');
+      ensureDraftRef.current = false;
+    }
+  }
+
+  useEffect(() => {
+    if (!dbProjectId) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(async () => {
+      await updateProject(dbProjectId, {
+        wizard: wiz,
+        stepIndex,
+        extras: buildExtras(),
+      }).catch(() => {
+        /* transient save failures are non-fatal */
+      });
+    }, 1500);
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wiz, stepIndex, dbProjectId]);
 
   const key = WIZ_STEPS[stepIndex].key;
 
@@ -277,6 +352,9 @@ function WizardShell() {
 
   function goNext() {
     if (!validateStep()) return;
+    if (key === 'duracao' && !dbProjectId) {
+      void ensureDraft();
+    }
     if (key === 'brief') {
       setStage('idle');
       setGenerating(false);
@@ -619,7 +697,7 @@ function WizardShell() {
     const styleObj = matchStyle(roteiro.voz.estilo);
     const trilhaNome = matchTrack(roteiro.trilha_mood);
     const project: Project = {
-      id: genId(),
+      id: dbProjectId || genId(),
       titulo: wiz.brief.produto || 'Vídeo sem título',
       roteiro: roteiro.narracao_texto,
       tabela_md: roteiro.tabela_md,
@@ -630,9 +708,15 @@ function WizardShell() {
       trilhaNome,
       status: 'pronto',
       createdAt: new Date().toISOString().slice(0, 10),
+      videoUrl: wiz.finalVideoUrl || undefined,
     };
     store.chargeCredits(cost);
-    store.addProject(project);
+    if (dbProjectId) {
+      void updateProjectStatus(dbProjectId, 'pronto', {
+        ...(wiz.finalVideoUrl && { video_url: wiz.finalVideoUrl }),
+        credits_charged: cost,
+      });
+    }
     setLastProject(project);
     setStage('done');
     toast('Vídeo gerado com sucesso!');
@@ -659,6 +743,8 @@ function WizardShell() {
     setGenerating(false);
     setProgress(0);
     setStepIndex(0);
+    setDbProjectId(null);
+    ensureDraftRef.current = false;
   }
 
   function copyToClipboard(text: string, label: string) {
@@ -695,12 +781,20 @@ function WizardShell() {
   const tableHtml = roteiro ? renderMarkdownTable(roteiro.tabela_md) : '';
   const trackName = roteiro ? matchTrack(roteiro.trilha_mood) : TRACKS[0];
 
+  if (loadingProject) {
+    return (
+      <div className="empty-state">
+        <p>Carregando projeto…</p>
+      </div>
+    );
+  }
+
   return (
     <>
       <div className="wizard-head">
         <div>
-          <p className="eyebrow">Novo projeto</p>
-          <h1>Criar vídeo</h1>
+          <p className="eyebrow">{dbProjectId ? 'Continuar projeto' : 'Novo projeto'}</p>
+          <h1>{dbProjectId ? wiz.brief.produto || 'Continuar vídeo' : 'Criar vídeo'}</h1>
         </div>
         <button className="btn-danger-text" onClick={() => router.push('/painel')}>cancelar</button>
       </div>

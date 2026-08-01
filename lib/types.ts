@@ -92,13 +92,8 @@ export type Project = {
   videoUrl?: string;
 };
 
-export type User = { nome: string; email: string } | null;
-
 export type StoreState = {
-  loggedIn: boolean;
-  user: User;
   credits: number;
-  projects: Project[];
 };
 
 export type Brief = {

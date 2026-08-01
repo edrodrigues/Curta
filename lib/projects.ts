@@ -1,0 +1,171 @@
+import { createSupabaseBrowser } from '@/lib/supabase/client';
+import type { Database, Json } from '@/lib/database.types';
+import { emptyBrief, type Brief, type Project, type ProjectStatus, type RoteiroOutput, type SceneRender, type VideoFormatKey, type VideoStage, type WizardData } from '@/lib/types';
+
+type ProjectsRow = Database['public']['Tables']['projects']['Row'];
+type ProjectsInsert = Database['public']['Tables']['projects']['Insert'];
+type ProjectsUpdate = Database['public']['Tables']['projects']['Update'];
+
+export type WizardState = {
+  stepIndex: number;
+  estiloId: string;
+  estiloNome: string;
+  trilhaNome: string;
+  tabela_md: string;
+  link: string;
+  duration: 30 | 60 | null;
+  videoFormat: VideoFormatKey | null;
+  brief: Brief;
+  roteiro: RoteiroOutput | null;
+  sceneRenders: SceneRender[];
+  finalVideoUrl: string | null;
+  videoStage: VideoStage;
+  videoCostEstimateUsd: number | null;
+};
+
+export type ProjectExtras = {
+  estiloId: string;
+  estiloNome: string;
+  trilhaNome: string;
+  tabela_md: string;
+  titulo?: string;
+};
+
+export function wizardStateFromWizard(wiz: WizardData, stepIndex: number, extras: ProjectExtras): WizardState {
+  return {
+    stepIndex,
+    estiloId: extras.estiloId,
+    estiloNome: extras.estiloNome,
+    trilhaNome: extras.trilhaNome,
+    tabela_md: extras.tabela_md,
+    link: wiz.link,
+    duration: wiz.duration,
+    videoFormat: wiz.videoFormat,
+    brief: wiz.brief,
+    roteiro: wiz.roteiro,
+    sceneRenders: wiz.sceneRenders,
+    finalVideoUrl: wiz.finalVideoUrl,
+    videoStage: wiz.videoStage,
+    videoCostEstimateUsd: wiz.videoCostEstimateUsd,
+  };
+}
+
+export function wizardFromState(ws: WizardState | null, row: ProjectsRow): { wizard: WizardData; stepIndex: number } {
+  const wizard: WizardData = {
+    link: ws?.link ?? row.link_origem ?? '',
+    duration: (ws?.duration ?? (row.duracao_segundos as 30 | 60 | null)) ?? null,
+    videoFormat: (ws?.videoFormat ?? (row.video_format as VideoFormatKey | null)) ?? null,
+    brief: ws?.brief ?? { ...emptyBrief },
+    roteiro: ws?.roteiro ?? null,
+    sceneRenders: ws?.sceneRenders ?? [],
+    finalVideoUrl: ws?.finalVideoUrl ?? row.video_url ?? null,
+    videoStage: ws?.videoStage ?? 'idle',
+    videoCostEstimateUsd: ws?.videoCostEstimateUsd ?? null,
+  };
+  return { wizard, stepIndex: ws?.stepIndex ?? 0 };
+}
+
+export function rowToProject(row: ProjectsRow): Project {
+  const ws = (row.wizard_state as WizardState | null) ?? null;
+  return {
+    id: row.id,
+    titulo: row.titulo ?? '',
+    roteiro: row.roteiro ?? '',
+    tabela_md: ws?.tabela_md,
+    duracao: (row.duracao_segundos ?? 30) as 30 | 60,
+    videoFormat: (row.video_format ?? undefined) as VideoFormatKey | undefined,
+    estiloId: ws?.estiloId ?? '',
+    estiloNome: row.estilo_narracao ?? ws?.estiloNome ?? '',
+    trilhaNome: row.estilo_trilha ?? ws?.trilhaNome ?? '',
+    status: row.status as ProjectStatus,
+    createdAt: row.created_at.slice(0, 10),
+    videoUrl: row.video_url ?? undefined,
+  };
+}
+
+function serializeWizard(wiz: WizardData, stepIndex: number, extras: ProjectExtras): Json {
+  return wizardStateFromWizard(wiz, stepIndex, extras) as unknown as Json;
+}
+
+export async function listProjects(): Promise<Project[]> {
+  const supabase = createSupabaseBrowser();
+  const { data, error } = await supabase
+    .from('projects')
+    .select('*')
+    .order('updated_at', { ascending: false });
+  if (error) throw error;
+  return (data ?? []).map(rowToProject);
+}
+
+export async function loadProject(id: string): Promise<{ project: Project; wizard: WizardData; stepIndex: number } | null> {
+  const supabase = createSupabaseBrowser();
+  const { data, error } = await supabase.from('projects').select('*').eq('id', id).single();
+  if (error || !data) return null;
+  const project = rowToProject(data);
+  const ws = (data.wizard_state as WizardState | null) ?? null;
+  const { wizard, stepIndex } = wizardFromState(ws, data);
+  return { project, wizard, stepIndex };
+}
+
+export async function createProject(user_id: string, input: { wizard: WizardData; stepIndex: number; extras: ProjectExtras }): Promise<string | null> {
+  const supabase = createSupabaseBrowser();
+  const insert: ProjectsInsert = {
+    user_id,
+    titulo: (input.extras.titulo || input.wizard.brief.produto) || null,
+    link_origem: input.wizard.link || null,
+    roteiro: input.wizard.roteiro?.narracao_texto || null,
+    duracao_segundos: input.wizard.duration ?? null,
+    estilo_narracao: input.extras.estiloNome || null,
+    estilo_trilha: input.extras.trilhaNome || null,
+    video_format: input.wizard.videoFormat ?? null,
+    status: 'rascunho',
+    wizard_state: serializeWizard(input.wizard, input.stepIndex, input.extras),
+  };
+  const { data, error } = await supabase.from('projects').insert(insert).select('id').single();
+  if (error || !data) return null;
+  return data.id;
+}
+
+export async function updateProject(id: string, input: { wizard: WizardData; stepIndex: number; extras: ProjectExtras }): Promise<void> {
+  const supabase = createSupabaseBrowser();
+  const update: ProjectsUpdate = {
+    titulo: (input.extras.titulo || input.wizard.brief.produto) || null,
+    link_origem: input.wizard.link || null,
+    roteiro: input.wizard.roteiro?.narracao_texto || null,
+    duracao_segundos: input.wizard.duration ?? null,
+    estilo_narracao: input.extras.estiloNome || null,
+    estilo_trilha: input.extras.trilhaNome || null,
+    video_format: input.wizard.videoFormat ?? null,
+    wizard_state: serializeWizard(input.wizard, input.stepIndex, input.extras),
+  };
+  const { error } = await supabase.from('projects').update(update).eq('id', id);
+  if (error) throw error;
+}
+
+export async function updateProjectStatus(id: string, status: ProjectStatus, extra?: { video_url?: string; credits_charged?: number }): Promise<void> {
+  const supabase = createSupabaseBrowser();
+  const update: ProjectsUpdate = { status, ...extra };
+  const { error } = await supabase.from('projects').update(update).eq('id', id);
+  if (error) throw error;
+}
+
+export async function deleteProjectDb(id: string): Promise<void> {
+  const supabase = createSupabaseBrowser();
+  const { error } = await supabase.from('projects').delete().eq('id', id);
+  if (error) throw error;
+}
+
+export async function duplicateProjectDb(id: string): Promise<string | null> {
+  const supabase = createSupabaseBrowser();
+  const { data, error } = await supabase.from('projects').select('*').eq('id', id).single();
+  if (error || !data) return null;
+  const { id: _omit, created_at: _c, updated_at: _u, ...rest } = data;
+  const insert: ProjectsInsert = {
+    ...rest,
+    titulo: (data.titulo ?? 'Projeto') + ' (cópia)',
+    status: 'rascunho',
+  };
+  const { data: inserted, error: insErr } = await supabase.from('projects').insert(insert).select('id').single();
+  if (insErr || !inserted) return null;
+  return inserted.id;
+}

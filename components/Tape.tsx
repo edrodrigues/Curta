@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useStore, useToast } from '@/lib/store';
 import { useTheme } from '@/lib/theme';
+import { useAuth, getDisplayName } from '@/lib/auth';
 
 export function Tape() {
   const pathname = usePathname();
@@ -11,14 +12,15 @@ export function Tape() {
   const store = useStore();
   const { toast } = useToast();
   const { toggle } = useTheme();
+  const { user, signOut } = useAuth();
 
   const onGuestRoutes = pathname === '/' || pathname?.startsWith('/entrar') || pathname?.startsWith('/criar-conta');
-  const showGuestHeader = !store.loggedIn || onGuestRoutes;
+  const showGuestHeader = !user || onGuestRoutes;
 
-  function handleReset(e: React.MouseEvent) {
+  async function handleSignOut(e: React.MouseEvent) {
     e.preventDefault();
-    store.reset();
-    toast('Demonstração reiniciada.');
+    await signOut();
+    toast('Sessão encerrada.');
     router.push('/');
   }
 
@@ -54,8 +56,16 @@ export function Tape() {
               title="Painel"
               aria-label="Painel"
             >
-              {(store.user?.nome || 'V').charAt(0).toUpperCase()}
+              {getDisplayName(user).charAt(0).toUpperCase()}
             </Link>
+            <button
+              className="btn btn-quiet"
+              onClick={handleSignOut}
+              title="Sair"
+              aria-label="Sair"
+            >
+              Sair
+            </button>
           </div>
         )}
       </div>

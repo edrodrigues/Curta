@@ -1,13 +1,12 @@
 'use client';
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import type { Project, StoreState } from './types';
-import { genId } from './types';
+import type { StoreState } from './types';
 
 const STORAGE_KEY = 'curta_demo_state_v1';
 
 function defaultState(): StoreState {
-  return { loggedIn: false, user: null, credits: 0, projects: [] };
+  return { credits: 0 };
 }
 
 function loadState(): StoreState {
@@ -24,14 +23,9 @@ function loadState(): StoreState {
 
 type StoreContextValue = StoreState & {
   hydrated: boolean;
-  login: (nome: string, email: string) => void;
-  logout: () => void;
   reset: () => void;
   addCredits: (n: number) => void;
   chargeCredits: (n: number) => void;
-  addProject: (p: Project) => void;
-  deleteProject: (id: string) => void;
-  duplicateProject: (id: string) => void;
 };
 
 const StoreContext = createContext<StoreContextValue | null>(null);
@@ -54,22 +48,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     }
   }, [state, hydrated]);
 
-  const login = useCallback((nome: string, email: string) => {
-    setState((prev) => {
-      const bonus = prev.credits === 0 && prev.projects.length === 0 ? 2 : prev.credits;
-      return {
-        loggedIn: true,
-        user: { nome: nome || 'Você', email: email || '' },
-        credits: bonus,
-        projects: prev.projects,
-      };
-    });
-  }, []);
-
-  const logout = useCallback(() => {
-    setState((prev) => ({ ...prev, loggedIn: false, user: null }));
-  }, []);
-
   const reset = useCallback(() => {
     setState(defaultState());
   }, []);
@@ -82,42 +60,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setState((prev) => ({ ...prev, credits: Math.max(0, prev.credits - n) }));
   }, []);
 
-  const addProject = useCallback((p: Project) => {
-    setState((prev) => ({ ...prev, projects: [p, ...prev.projects] }));
-  }, []);
-
-  const deleteProject = useCallback((id: string) => {
-    setState((prev) => ({ ...prev, projects: prev.projects.filter((p) => p.id !== id) }));
-  }, []);
-
-  const duplicateProject = useCallback((id: string) => {
-    setState((prev) => {
-      const src = prev.projects.find((p) => p.id === id);
-      if (!src) return prev;
-      const copy: Project = {
-        ...src,
-        id: genId(),
-        titulo: src.titulo + ' (cópia)',
-        status: 'rascunho',
-      };
-      return { ...prev, projects: [copy, ...prev.projects] };
-    });
-  }, []);
-
   const value = useMemo<StoreContextValue>(
     () => ({
       ...state,
       hydrated,
-      login,
-      logout,
       reset,
       addCredits,
       chargeCredits,
-      addProject,
-      deleteProject,
-      duplicateProject,
     }),
-    [state, hydrated, login, logout, reset, addCredits, chargeCredits, addProject, deleteProject, duplicateProject]
+    [state, hydrated, reset, addCredits, chargeCredits]
   );
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
