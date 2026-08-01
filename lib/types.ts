@@ -141,6 +141,7 @@ export type SceneRender = {
   error?: string;
 };
 export type VideoStage = 'idle' | 'running' | 'assembling' | 'done' | 'error';
+export type NarrationStage = 'idle' | 'generating' | 'done' | 'error';
 
 export type WizardData = {
   link: string;
@@ -153,6 +154,11 @@ export type WizardData = {
   finalVideoKey: string | null;
   videoStage: VideoStage;
   videoCostEstimateUsd: number | null;
+  narrationStage: NarrationStage;
+  narrationRunId: string | null;
+  narrationKey: string | null;
+  narrationUrl: string | null;
+  narrationError: string | null;
 };
 
 export const emptyBrief: Brief = {

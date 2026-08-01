@@ -1,6 +1,6 @@
 import { createSupabaseBrowser } from '@/lib/supabase/client';
 import type { Database, Json } from '@/lib/database.types';
-import { emptyBrief, type Brief, type Project, type ProjectStatus, type RoteiroOutput, type SceneRender, type VideoFormatKey, type VideoStage, type WizardData } from '@/lib/types';
+import { emptyBrief, type Brief, type NarrationStage, type Project, type ProjectStatus, type RoteiroOutput, type SceneRender, type VideoFormatKey, type VideoStage, type WizardData } from '@/lib/types';
 
 type ProjectsRow = Database['public']['Tables']['projects']['Row'];
 type ProjectsInsert = Database['public']['Tables']['projects']['Insert'];
@@ -22,6 +22,11 @@ export type WizardState = {
   finalVideoKey: string | null;
   videoStage: VideoStage;
   videoCostEstimateUsd: number | null;
+  narrationStage: NarrationStage;
+  narrationRunId: string | null;
+  narrationKey: string | null;
+  narrationUrl: string | null;
+  narrationError: string | null;
 };
 
 export type ProjectExtras = {
@@ -49,6 +54,11 @@ export function wizardStateFromWizard(wiz: WizardData, stepIndex: number, extras
     finalVideoKey: wiz.finalVideoKey,
     videoStage: wiz.videoStage,
     videoCostEstimateUsd: wiz.videoCostEstimateUsd,
+    narrationStage: wiz.narrationStage,
+    narrationRunId: wiz.narrationRunId,
+    narrationKey: wiz.narrationKey,
+    narrationUrl: wiz.narrationUrl,
+    narrationError: wiz.narrationError,
   };
 }
 
@@ -64,6 +74,11 @@ export function wizardFromState(ws: WizardState | null, row: ProjectsRow): { wiz
     finalVideoKey: ws?.finalVideoKey ?? null,
     videoStage: ws?.videoStage ?? 'idle',
     videoCostEstimateUsd: ws?.videoCostEstimateUsd ?? null,
+    narrationStage: ws?.narrationStage ?? 'idle',
+    narrationRunId: ws?.narrationRunId ?? null,
+    narrationKey: ws?.narrationKey ?? null,
+    narrationUrl: ws?.narrationUrl ?? null,
+    narrationError: ws?.narrationError ?? null,
   };
   return { wizard, stepIndex: ws?.stepIndex ?? 0 };
 }
@@ -182,7 +197,7 @@ export async function updateProject(
   return { ok: true, updated_at: data.updated_at };
 }
 
-export async function updateProjectStatus(id: string, status: ProjectStatus, extra?: { video_url?: string; credits_charged?: number }): Promise<void> {
+export async function updateProjectStatus(id: string, status: ProjectStatus, extra?: { video_url?: string; audio_url?: string; credits_charged?: number }): Promise<void> {
   const supabase = createSupabaseBrowser();
   const update: ProjectsUpdate = { status, ...extra };
   const { error } = await supabase.from('projects').update(update).eq('id', id);

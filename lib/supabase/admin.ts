@@ -26,3 +26,4 @@ export function supabaseAdmin(): SupabaseClient {
 }
 
 export const VIDEO_BUCKET = "video";
+export const AUDIO_BUCKET = "audio";

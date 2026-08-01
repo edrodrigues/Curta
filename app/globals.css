@@ -460,6 +460,9 @@ label.field .l { display: block; font-family: var(--font-mono); font-size: var(-
 .wave-progress:disabled { cursor: default; opacity: 0.55; }
 .wave-meta { display: flex; justify-content: space-between; width: calc(100% - 4rem); margin: 0.35rem 0 0 4rem; color: var(--text-faint); font-family: var(--font-mono); font-size: 0.68rem; }
 .wave-error { width: calc(100% - 4rem); margin: 0.65rem 0 0 4rem; color: var(--accent); font-family: var(--font-mono); font-size: 0.7rem; }
+.wave-options { width: calc(100% - 4rem); margin: 0.9rem 0 0 4rem; display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+.wave-track-toggle { display: inline-flex; align-items: center; gap: 0.45rem; cursor: pointer; color: var(--text-faint); font-size: 0.78rem; }
+.wave-track-toggle input { accent-color: var(--accent); cursor: pointer; }
 
 .gerar-stage { max-width: 34rem; }
 .progress-track { height: 10px; background: var(--bg-sunken); border-radius: 100px; overflow: hidden; border: 1px solid var(--border); margin: 1.5rem 0 1rem; }

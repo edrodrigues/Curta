@@ -1,5 +1,15 @@
 import "server-only";
 
+import {
+  type MonidVoiceStyle,
+  NARRATION_VOICES,
+  DEFAULT_NARRATION_VOICE,
+  narrationVoiceForStyle,
+} from "@/lib/monid/voices";
+
+export type { MonidVoiceStyle } from "@/lib/monid/voices";
+export { NARRATION_VOICES, DEFAULT_NARRATION_VOICE, narrationVoiceForStyle };
+
 const MONID_BASE = "https://api.monid.ai/v1";
 const VIDEO_MODEL = "MiniMax-Hailuo-2.3" as const;
 
@@ -189,4 +199,100 @@ export async function getRun(run_id: string): Promise<GetRunResult> {
       ? String((data.error as Record<string, unknown>).message ?? "")
       : undefined;
   return { run_id, status, download_url, stoppable, error };
+}
+
+export type NarrationModel =
+  | "eleven_multilingual_v2"
+  | "eleven_flash_v2_5"
+  | "eleven_v3";
+
+export type StartNarrationInput = {
+  text: string;
+  voice_id: string;
+  model_id?: NarrationModel;
+  stability?: number;
+  similarity_boost?: number;
+  style?: number;
+  speed?: number;
+};
+
+export type StartNarrationResult = {
+  run_id: string;
+  status: MonidRunStatus;
+};
+
+export async function startNarrationRun(
+  input: StartNarrationInput
+): Promise<StartNarrationResult> {
+  const text = (input.text || "").trim();
+  if (!text) {
+    throw new MonidError("Texto de narração vazio.", "unknown");
+  }
+  if (text.length > 5000) {
+    throw new MonidError(
+      "Texto de narração excede 5000 caracteres (limite da ElevenLabs). Divida o roteiro.",
+      "unknown"
+    );
+  }
+  const body = {
+    provider: "elevenlabs",
+    endpoint: "/text-to-speech",
+    input: {
+      text,
+      voice_id: input.voice_id,
+      model_id: input.model_id ?? "eleven_multilingual_v2",
+      voice_settings: {
+        stability:
+          typeof input.stability === "number"
+            ? Math.min(1, Math.max(0, input.stability))
+            : 0.5,
+        similarity_boost:
+          typeof input.similarity_boost === "number"
+            ? Math.min(1, Math.max(0, input.similarity_boost))
+            : 0.75,
+        style:
+          typeof input.style === "number"
+            ? Math.min(1, Math.max(0, input.style))
+            : 0,
+        speed:
+          typeof input.speed === "number"
+            ? Math.min(1.2, Math.max(0.7, input.speed))
+            : 1.0,
+      },
+    },
+  };
+
+  let res: Response;
+  try {
+    res = await fetch(`${MONID_BASE}/run`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify(body),
+      cache: "no-store",
+    });
+  } catch (e) {
+    throw new MonidError(
+      `Falha de rede ao iniciar narração Monid: ${(e as Error).message}`,
+      "unknown"
+    );
+  }
+
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw mapHttpError(res.status, data);
+
+  const runId =
+    (typeof data === "object" && data && "runId" in data && typeof data.runId === "string"
+      ? data.runId
+      : null) ??
+    (typeof data === "object" && data && "run_id" in data && typeof data.run_id === "string"
+      ? data.run_id
+      : null);
+  if (!runId) {
+    throw new MonidError("Resposta do Monid sem runId.", "unknown", res.status);
+  }
+  const status =
+    (typeof data === "object" && data && "status" in data && typeof data.status === "string"
+      ? data.status
+      : "RUNNING") as MonidRunStatus;
+  return { run_id: runId, status };
 }

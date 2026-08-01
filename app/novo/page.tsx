@@ -23,6 +23,7 @@ import { Suspense } from 'react';
 import { RequireAuth } from '@/lib/RequireAuth';
 import { loadProject, createProject, updateProject, updateProjectStatus } from '@/lib/projects';
 import { useAuth } from '@/lib/auth';
+import { narrationVoiceForStyle } from '@/lib/monid/voices';
 
 const WIZ_STEPS: { key: string; label: string }[] = [
   { key: 'duracao', label: 'Duração' },
@@ -111,6 +112,11 @@ const initialWiz: WizardData = {
   finalVideoKey: null,
   videoStage: 'idle',
   videoCostEstimateUsd: null,
+  narrationStage: 'idle',
+  narrationRunId: null,
+  narrationKey: null,
+  narrationUrl: null,
+  narrationError: null,
 };
 
 type Stage = 'idle' | 'running' | 'done';
@@ -266,6 +272,24 @@ function WizardShell() {
   const etaAnchorRef = useRef<{ at: number; value: number } | null>(null);
   const lastEtaKeyRef = useRef('');
 
+  async function refreshNarrationUrl(w: WizardData): Promise<WizardData> {
+    if (!w.narrationKey || w.narrationStage !== 'done') return w;
+    try {
+      const signRes = await fetch('/api/audio/sign', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: w.narrationKey }),
+      });
+      const signData = await signRes.json();
+      if (signRes.ok && signData?.ok && signData.url) {
+        return { ...w, narrationUrl: signData.url };
+      }
+    } catch {
+      /* keep stored url if refresh fails */
+    }
+    return w;
+  }
+
   useEffect(() => {
     if (!projectIdParam) { setLoadingProject(false); return; }
     let cancelled = false;
@@ -299,6 +323,7 @@ function WizardShell() {
           /* keep stored url if refresh fails */
         }
       }
+      nextWiz = await refreshNarrationUrl(nextWiz);
       if (cancelled) return;
       serverUpdatedAtRef.current = updated_at;
       setWiz(nextWiz);
@@ -378,6 +403,7 @@ function WizardShell() {
               }
             } catch { /* keep */ }
           }
+          nextWiz = await refreshNarrationUrl(nextWiz);
           setWiz(nextWiz);
           setStepIndex(fresh.stepIndex);
           setLastProject(fresh.project);
@@ -436,7 +462,20 @@ function WizardShell() {
       setStage('idle');
       setGenerating(false);
       setProgress(0);
-      setWiz((w) => ({ ...w, roteiro: null, sceneRenders: [], finalVideoUrl: null, finalVideoKey: null, videoStage: 'idle', videoCostEstimateUsd: null }));
+      setWiz((w) => ({
+        ...w,
+        roteiro: null,
+        sceneRenders: [],
+        finalVideoUrl: null,
+        finalVideoKey: null,
+        videoStage: 'idle',
+        videoCostEstimateUsd: null,
+        narrationStage: 'idle',
+        narrationRunId: null,
+        narrationKey: null,
+        narrationUrl: null,
+        narrationError: null,
+      }));
       goToStep(stepIndex + 1);
       return;
     }
@@ -453,6 +492,8 @@ function WizardShell() {
   const videoRunningRef = useRef(false);
   const assemblingRef = useRef(false);
   const videoTokenRef = useRef<string>('');
+  const narrationRunningRef = useRef(false);
+  const narrationAutoRef = useRef(false);
 
   async function handleContinuarParaVideo() {
     const roteiro = wiz.roteiro;
@@ -701,6 +742,86 @@ function WizardShell() {
     }
   }
 
+  async function generateNarration() {
+    const roteiro = wiz.roteiro;
+    const text = roteiro?.narracao_texto || '';
+    if (!text) {
+      toast('Gere o roteiro antes de gerar a narração.');
+      return;
+    }
+    if (narrationRunningRef.current) return;
+    narrationRunningRef.current = true;
+    const voiceId = narrationVoiceForStyle(roteiro?.voz.estilo || '');
+    const stability = Number.parseFloat(roteiro?.voz.estabilidade || '0.5');
+    const exaggeration = Number.parseFloat(roteiro?.voz.exaggeration || '0');
+    setWiz((w) => ({
+      ...w,
+      narrationStage: 'generating',
+      narrationRunId: null,
+      narrationKey: null,
+      narrationUrl: null,
+      narrationError: null,
+    }));
+    try {
+      const res = await fetch('/api/audio/narrate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project_id: dbProjectId || undefined,
+          text,
+          voice_id: voiceId,
+          stability: Number.isFinite(stability) ? stability : 0.5,
+          style: Number.isFinite(exaggeration) ? exaggeration : 0,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        const msg = data?.message || 'Falha ao gerar a narração.';
+        setWiz((w) => ({ ...w, narrationStage: 'error', narrationError: msg }));
+        toast(msg);
+        return;
+      }
+      setWiz((w) => ({
+        ...w,
+        narrationStage: 'done',
+        narrationRunId: typeof data.run_id === 'string' ? data.run_id : null,
+        narrationKey: typeof data.narration_key === 'string' ? data.narration_key : null,
+        narrationUrl: typeof data.narration_url === 'string' ? data.narration_url : null,
+        narrationError: null,
+      }));
+      toast('Narração gerada.');
+    } catch {
+      const msg = 'Falha de conexão ao gerar a narração.';
+      setWiz((w) => ({ ...w, narrationStage: 'error', narrationError: msg }));
+      toast(msg);
+    } finally {
+      narrationRunningRef.current = false;
+    }
+  }
+
+  async function reloadNarration() {
+    if (!wiz.narrationKey) {
+      void generateNarration();
+      return;
+    }
+    const signed = await refreshNarrationUrl({ ...wiz, narrationStage: 'done' });
+    setWiz(signed);
+    toast(signed.narrationUrl ? 'Áudio recarregado.' : 'Não foi possível recarregar o áudio.');
+  }
+
+  useEffect(() => {
+    if (key !== 'preview-audio') {
+      narrationAutoRef.current = false;
+      return;
+    }
+    if (narrationAutoRef.current || narrationRunningRef.current) return;
+    if (wiz.narrationStage === 'idle' && !!wiz.roteiro?.narracao_texto) {
+      narrationAutoRef.current = true;
+      void generateNarration();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, wiz.narrationStage, wiz.roteiro]);
+
   useEffect(() => {
     if (key === 'gerando' && !generating && stage !== 'done' && stage !== 'running') {
       void runRoteiroGeneration();
@@ -939,6 +1060,7 @@ function WizardShell() {
     if (dbProjectId) {
       void updateProjectStatus(dbProjectId, 'pronto', {
         ...(wiz.finalVideoUrl && { video_url: wiz.finalVideoUrl }),
+        ...(wiz.narrationKey && { audio_url: wiz.narrationKey }),
         credits_charged: cost,
       });
     }
@@ -1429,8 +1551,49 @@ function WizardShell() {
       <div className={`step-panel${key === 'preview-audio' ? ' is-active' : ''}`} data-step="preview-audio">
         <p className="eyebrow step-eyebrow">{eyebrowText}</p>
         <h2 className="step-title">Prévia do áudio</h2>
-        <p className="step-sub">Ouça o ritmo e o clima da narração sugerida.</p>
-        {key === 'preview-audio' && <AudioPreview trackName={trackName} />}
+        <p className="step-sub">Ouça a narração gerada no ElevenLabs, com a trilha de fundo em volume reduzido.</p>
+        {key === 'preview-audio' && (() => {
+          const nStage = wiz.narrationStage;
+          return (
+            <>
+              {nStage === 'idle' && (
+                <p style={{ fontFamily: 'var(--font-mono)', marginTop: '0.5rem' }}>Aguardando início da geração…</p>
+              )}
+              {nStage === 'generating' && (
+                <div className="gerar-stage">
+                  <div className="progress-track is-indeterminate" aria-hidden="true"><div className="progress-fill" /></div>
+                  <p style={{ fontFamily: 'var(--font-mono)', marginTop: '0.75rem' }}>Sintetizando narração no ElevenLabs…</p>
+                  <div className="await-card">Isso costuma levar <b>~30 segundos</b>. Acompanhe o progresso.</div>
+                </div>
+              )}
+              {nStage === 'error' && (
+                <div className="roteiro-aviso">
+                  <p className="eyebrow">Erro</p>
+                  <p>{wiz.narrationError || 'Falha ao gerar a narração.'}</p>
+                  <div className="roteiro-actions" style={{ marginTop: '1rem' }}>
+                    <button className="btn btn-primary" type="button" onClick={() => void generateNarration()}>
+                      Tentar novamente
+                    </button>
+                  </div>
+                </div>
+              )}
+              {nStage === 'done' && wiz.narrationUrl && (
+                <NarrationAudioPreview narrationUrl={wiz.narrationUrl} trackName={trackName} />
+              )}
+              {nStage === 'done' && !wiz.narrationUrl && (
+                <div className="roteiro-aviso">
+                  <p className="eyebrow">Pronto</p>
+                  <p>A narração foi gerada, mas o link de reprodução expirou.</p>
+                  <div className="roteiro-actions" style={{ marginTop: '1rem' }}>
+                    <button className="btn btn-primary" type="button" onClick={() => void reloadNarration()}>
+                      Recarregar áudio
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
+          );
+        })()}
       </div>
 
       {/* Step 9: Exportar */}
@@ -1515,6 +1678,8 @@ function formatTime(seconds: number): string {
   return `${minutes}:${remaining}`;
 }
 
+const WAVE_BARS = [18, 28, 38, 52, 66, 44, 30, 24, 42, 58, 74, 48, 34, 26, 52, 67, 78, 48, 32, 42, 62, 72, 54, 36, 28, 48, 68, 76, 58, 40, 28, 50, 64, 74, 46, 32, 42, 58, 70, 52, 34, 26, 46, 62, 76, 56, 38, 30];
+
 function AudioPreview({ trackName }: { trackName: string }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -1522,7 +1687,7 @@ function AudioPreview({ trackName }: { trackName: string }) {
   const [duration, setDuration] = useState(0);
   const [hasError, setHasError] = useState(false);
   const audioSrc = TRACK_AUDIO_URLS[trackName as keyof typeof TRACK_AUDIO_URLS] || TRACK_AUDIO_URLS['Ambiente calmo'];
-  const bars = [18, 28, 38, 52, 66, 44, 30, 24, 42, 58, 74, 48, 34, 26, 52, 67, 78, 48, 32, 42, 62, 72, 54, 36, 28, 48, 68, 76, 58, 40, 28, 50, 64, 74, 46, 32, 42, 58, 70, 52, 34, 26, 46, 62, 76, 56, 38, 30];
+  const bars = WAVE_BARS;
   const progress = duration > 0 ? currentTime / duration : 0;
 
   useEffect(() => {
@@ -1626,6 +1791,166 @@ function AudioPreview({ trackName }: { trackName: string }) {
       </div>
       {hasError && <p className="wave-error">Não foi possível carregar esta trilha.</p>}
       <audio ref={audioRef} src={audioSrc} preload="metadata" aria-label={`Prévia: ${trackName}`} />
+    </div>
+  );
+}
+
+function NarrationAudioPreview({ narrationUrl, trackName }: { narrationUrl: string; trackName: string }) {
+  const narrationRef = useRef<HTMLAudioElement | null>(null);
+  const trackRef = useRef<HTMLAudioElement | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [hasError, setHasError] = useState(false);
+  const [trackOn, setTrackOn] = useState(true);
+  const trackSrc = TRACK_AUDIO_URLS[trackName as keyof typeof TRACK_AUDIO_URLS] || TRACK_AUDIO_URLS['Ambiente calmo'];
+  const bars = WAVE_BARS;
+  const progress = duration > 0 ? currentTime / duration : 0;
+
+  useEffect(() => {
+    const nar = narrationRef.current;
+    const trk = trackRef.current;
+    if (!nar || !trk) return;
+    nar.pause();
+    trk.pause();
+    nar.currentTime = 0;
+    trk.currentTime = 0;
+    setIsPlaying(false);
+    setCurrentTime(0);
+    setDuration(0);
+    setHasError(false);
+  }, [narrationUrl, trackSrc]);
+
+  useEffect(() => {
+    const nar = narrationRef.current;
+    const trk = trackRef.current;
+    if (!nar || !trk) return;
+    trk.volume = 0.25;
+    const updateTime = () => {
+      setCurrentTime(nar.currentTime);
+      if (Math.abs((trk.currentTime || 0) - (nar.currentTime || 0)) > 0.5) {
+        try { trk.currentTime = nar.currentTime; } catch { /* ignore */ }
+      }
+    };
+    const updateDuration = () => setDuration(nar.duration);
+    const markPlaying = () => setIsPlaying(true);
+    const markPaused = () => setIsPlaying(false);
+    const finish = () => {
+      setIsPlaying(false);
+      setCurrentTime(0);
+      nar.currentTime = 0;
+      trk.currentTime = 0;
+      nar.pause();
+      trk.pause();
+    };
+    const markError = () => {
+      setIsPlaying(false);
+      setHasError(true);
+    };
+    nar.addEventListener('timeupdate', updateTime);
+    nar.addEventListener('loadedmetadata', updateDuration);
+    nar.addEventListener('play', markPlaying);
+    nar.addEventListener('pause', markPaused);
+    nar.addEventListener('ended', finish);
+    nar.addEventListener('error', markError);
+    return () => {
+      nar.removeEventListener('timeupdate', updateTime);
+      nar.removeEventListener('loadedmetadata', updateDuration);
+      nar.removeEventListener('play', markPlaying);
+      nar.removeEventListener('pause', markPaused);
+      nar.removeEventListener('ended', finish);
+      nar.removeEventListener('error', markError);
+    };
+  }, [narrationUrl, trackSrc]);
+
+  async function togglePlay() {
+    const nar = narrationRef.current;
+    const trk = trackRef.current;
+    if (!nar || !trk) return;
+    if (nar.paused) {
+      try {
+        setHasError(false);
+        await nar.play();
+        if (trackOn) {
+          try {
+            trk.currentTime = nar.currentTime;
+            await trk.play();
+          } catch { /* keep narration playing */ }
+        }
+      } catch {
+        setHasError(true);
+      }
+    } else {
+      nar.pause();
+      trk.pause();
+    }
+  }
+
+  function seek(value: string) {
+    const nar = narrationRef.current;
+    const trk = trackRef.current;
+    const nextTime = Number(value);
+    if (!nar || !trk || !Number.isFinite(nextTime)) return;
+    nar.currentTime = nextTime;
+    try { trk.currentTime = nextTime; } catch { /* ignore */ }
+    setCurrentTime(nextTime);
+  }
+
+  function toggleTrack() {
+    const trk = trackRef.current;
+    const next = !trackOn;
+    setTrackOn(next);
+    if (trk) {
+      if (next && !(narrationRef.current?.paused ?? true)) {
+        try { trk.play(); } catch { /* ignore */ }
+      } else {
+        trk.pause();
+      }
+    }
+  }
+
+  return (
+    <div className="wave-stage">
+      <div className="wave-row">
+        <button
+          className="wave-play"
+          type="button"
+          onClick={togglePlay}
+          aria-label={isPlaying ? 'Pausar prévia' : 'Reproduzir prévia'}
+          aria-pressed={isPlaying}
+        >
+          {isPlaying ? 'Ⅱ' : '▶'}
+        </button>
+        <div className="wave-bars" aria-hidden="true">
+          {bars.map((height, index) => (
+            <i key={index} style={{ height: `${height}%` }} className={index / bars.length < progress ? 'is-played' : ''} />
+          ))}
+        </div>
+      </div>
+      <input
+        className="wave-progress"
+        type="range"
+        min="0"
+        max={duration || 0}
+        step="0.01"
+        value={Math.min(currentTime, duration || 0)}
+        onChange={(event) => seek(event.target.value)}
+        disabled={!duration}
+        aria-label="Posição da prévia da narração"
+      />
+      <div className="wave-meta">
+        <span>{formatTime(currentTime)}</span>
+        <span>{formatTime(duration)}</span>
+      </div>
+      <div className="wave-options">
+        <label className="wave-track-toggle">
+          <input type="checkbox" checked={trackOn} onChange={toggleTrack} />
+          <span>Trilha de fundo</span>
+        </label>
+      </div>
+      {hasError && <p className="wave-error">Não foi possível carregar o áudio da narração.</p>}
+      <audio ref={narrationRef} src={narrationUrl} preload="metadata" aria-label="Narração" />
+      <audio ref={trackRef} src={trackSrc} loop preload="metadata" aria-label={`Trilha: ${trackName}`} />
     </div>
   );
 }
