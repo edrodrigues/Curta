@@ -135,12 +135,12 @@ create table public.profiles (
 create table public.credit_wallets ( ... );
 create table public.credit_transactions ( ... );
 
--- função do trigger (SECURITY INVOKER, schema não-exposto)
+-- função do trigger (SECURITY DEFINER, schema não-exposto)
 create or replace function private.handle_new_user()
 returns trigger
 language plpgsql
-security invoker
-set search_path = public
+security definer
+set search_path = ''
 as $$
 begin
   insert into public.profiles (id, name) values (new.id, coalesce(new.raw_user_meta_data->>'name', ''));
@@ -151,12 +151,15 @@ begin
 end;
 $$;
 
+alter function private.handle_new_user() owner to postgres;
+revoke all on function private.handle_new_user() from public, anon, authenticated;
+
 create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function private.handle_new_user();
 ```
 
-> Use `SECURITY INVOKER` (não `SECURITY DEFINER`). A função roda como o usuário que criou a conta via Auth; como é um trigger em `auth.users`, é invocada pelo papel interno do Supabase Auth e tem as permissões necessárias. Mantenha-a no schema `private` (não-exposto pela Data API).
+> Use `SECURITY DEFINER` (não `SECURITY INVOKER`) — é o padrão canônico do Supabase para `on_auth_user_created`. O GoTrue dispara o trigger com o papel interno do Auth, que **não** tem `INSERT` nas tabelas `public.*` (postgres-owned, RLS ligado, sem política de INSERT — nem pode haver, pois no signup não há sessão para `auth.uid()`). Com `SECURITY INVOKER` o `INSERT` em `profiles` aborta a transação e o GoTrue faz rollback do `auth.users` → signup retorna **HTTP 500** (`permission denied for table profiles`). Com `SECURITY DEFINER` + owner `postgres` (bypassa RLS) o trigger succeeds. Refs devem ser fully-qualified e `search_path = ''` previne hijacking. Mantenha a função no schema **não-exposto** `private` (`revoke usage from anon, authenticated`) e revogue `EXECUTE` de `public`/`anon`/`authenticated` como defense-in-depth — o trigger interno continua funcionando, pois triggers não respeitam `EXECUTE` da função.
 
 ### 3.3 Crédito atômico de compra — RPC `private.apply_purchase`
 
@@ -490,7 +493,7 @@ select cron.schedule(
 - [ ] Políticas usam `TO authenticated` **+** predicado de owner (`(select auth.uid()) = user_id`); nunca `TO authenticated` sozinho (BOLA/IDOR).
 - [ ] Políticas `UPDATE` têm `USING` **e** `WITH CHECK`.
 - [ ] Não use `auth.role()` (depreciado) — use a cláusula `TO`.
-- [ ] `SECURITY DEFINER` só em schema não-exposto (`private`); inclua checagem de owner no corpo. Prefira `SECURITY INVOKER` quando possível.
+- [ ] `SECURITY DEFINER` só em schema não-exposto (`private`); inclua checagem de owner no corpo. Prefira `SECURITY INVOKER` quando possível — **exceto** em funções de trigger `on_auth_user_created` (e gatilhos equivalentes do Auth), que precisam de `SECURITY DEFINER` + owner `postgres` + `search_path = ''` porque o papel interno do GoTrue não tem `INSERT` nas tabelas da aplicação (ver §3.2).
 - [ ] Views são `security_invoker = true` (Postgres 15+) ou têm acesso revogado de `anon`/`authenticated`.
 - [ ] Storage upsert requer INSERT + SELECT + UPDATE — garanta os três onde houver substituição de arquivo.
 - [ ] Pinne versões dos pacotes Supabase e commite o lockfile (`package-lock.json`).
