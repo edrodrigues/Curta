@@ -1,12 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import fs from "node:fs";
-import path from "node:path";
 import { getRun, MonidError, type MonidRunStatus } from "@/lib/monid/client";
+import { supabaseAdmin, VIDEO_BUCKET } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const CLIPS_DIR = path.join(process.cwd(), "public", "_clips");
 
 type RunRef = { index: number; run_id: string };
 
@@ -44,19 +41,25 @@ function mapStatus(s: MonidRunStatus): "pendente" | "rodando" | "concluido" | "f
   }
 }
 
-async function downloadClip(
+async function uploadClip(
   run_id: string,
   download_url: string
 ): Promise<string | null> {
-  await fs.promises.mkdir(CLIPS_DIR, { recursive: true }).catch(() => {});
-  const targetPath = path.join(CLIPS_DIR, `${run_id}.mp4`);
   try {
     const res = await fetch(download_url, { cache: "no-store" });
     if (!res.ok || !res.body) return null;
     const buf = Buffer.from(await res.arrayBuffer());
     if (buf.length === 0) return null;
-    await fs.promises.writeFile(targetPath, buf);
-    return `/_clips/${run_id}.mp4`;
+    const key = `clips/${run_id}.mp4`;
+    const admin = supabaseAdmin();
+    const { error } = await admin.storage
+      .from(VIDEO_BUCKET)
+      .upload(key, buf, {
+        contentType: "video/mp4",
+        upsert: true,
+      });
+    if (error) return null;
+    return key;
   } catch {
     return null;
   }
@@ -88,14 +91,14 @@ export async function POST(req: NextRequest) {
         const status = mapStatus(res.status);
         let clip_url: string | undefined = undefined;
         if (status === "concluido" && res.download_url) {
-          const saved = await downloadClip(r.run_id, res.download_url);
+          const saved = await uploadClip(r.run_id, res.download_url);
           if (saved) clip_url = saved;
           else {
             return {
               index: r.index,
               run_id: r.run_id,
               status: "falhou" as const,
-              error: "Não foi possível baixar o clipe gerado.",
+              error: "Não foi possível baixar e armazenar o clipe gerado.",
             };
           }
         }

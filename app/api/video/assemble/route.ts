@@ -1,86 +1,42 @@
 import { NextRequest, NextResponse } from "next/server";
-import fs from "node:fs";
-import path from "node:path";
-import ffmpegPath from "@ffmpeg-installer/ffmpeg";
-import ffmpeg from "fluent-ffmpeg";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-ffmpeg.setFfmpegPath(ffmpegPath.path);
-
-const CLIPS_DIR = path.join(process.cwd(), "public", "_clips");
-const FINAL_DIR = path.join(process.cwd(), "public", "_final");
+const FN_URL =
+  "https://olnrqblgsyyxmtubdoez.functions.supabase.co/assemble-video";
 
 function isStringRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
 }
 
-function readClipUrls(v: unknown): string[] {
+function readClipPaths(v: unknown): string[] {
   if (!Array.isArray(v)) return [];
   const out: string[] = [];
   for (const row of v) {
     if (Array.isArray(row)) {
       for (const sub of row) {
         if (typeof sub === "string") out.push(sub);
-        else if (isStringRecord(sub) && typeof sub.clip_url === "string") out.push(sub.clip_url);
+        else if (isStringRecord(sub) && typeof sub.clip_url === "string")
+          out.push(sub.clip_url);
+        else if (isStringRecord(sub) && typeof sub.clip_path === "string")
+          out.push(sub.clip_path);
       }
     } else if (typeof row === "string") {
       out.push(row);
     } else if (isStringRecord(row) && typeof row.clip_url === "string") {
       out.push(row.clip_url);
+    } else if (isStringRecord(row) && typeof row.clip_path === "string") {
+      out.push(row.clip_path);
     }
   }
   return out;
 }
 
-function clipAbsFromUrl(url: string): string {
-  const rel = url.startsWith("/_clips/") ? url.slice("/_clips/".length) : path.basename(url);
-  return path.join(CLIPS_DIR, rel);
-}
-
-async function concatWithCopy(
-  absClips: string[],
-  listFile: string,
-  outFile: string
-): Promise<void> {
-  const list = absClips.map((c) => `file '${c.replace(/\\/g, "/")}'`).join("\n");
-  await fs.promises.writeFile(listFile, list, "utf8");
-  await new Promise<void>((resolve, reject) => {
-    ffmpeg()
-      .input(listFile)
-      .inputOptions(["-f concat", "-safe 0"])
-      .outputOptions(["-c copy"])
-      .on("end", () => resolve())
-      .on("error", (err: Error) => reject(err))
-      .save(outFile);
-  });
-}
-
-async function concatWithReencode(
-  absClips: string[],
-  outFile: string
-): Promise<void> {
-  const cmd = ffmpeg();
-  for (const c of absClips) cmd.input(c);
-  await new Promise<void>((resolve, reject) => {
-    cmd
-      .outputOptions([
-        "-filter_complex",
-        `${absClips.map((_, i) => `[${i}:v:0]`).join("")}concat=n=${absClips.length}:v=1:a=0[v]`,
-        "-map",
-        "[v]",
-        "-c:v",
-        "libx264",
-        "-pix_fmt",
-        "yuv420p",
-        "-preset",
-        "veryfast",
-      ])
-      .on("end", () => resolve())
-      .on("error", (err: Error) => reject(err))
-      .save(outFile);
-  });
+function randomToken(): string {
+  return (
+    "f" + Date.now().toString(16) + Math.random().toString(16).slice(2)
+  );
 }
 
 export async function POST(req: NextRequest) {
@@ -93,63 +49,60 @@ export async function POST(req: NextRequest) {
       { status: 400 }
     );
   }
-  const data = (body ?? {}) as { clip_urls?: unknown; project_id?: unknown };
-  const clipUrls = readClipUrls(data.clip_urls);
+  const data = (body ?? {}) as {
+    clip_urls?: unknown;
+    clip_paths?: unknown;
+    project_id?: unknown;
+  };
+  const clip_paths = readClipPaths(data.clip_paths ?? data.clip_urls);
 
-  if (clipUrls.length === 0) {
+  if (clip_paths.length === 0) {
     return NextResponse.json(
       { ok: false, message: "Nenhum clipe fornecido para a montagem." },
       { status: 400 }
     );
   }
 
-  const absClips = clipUrls.map(clipAbsFromUrl);
-  const missing = absClips.filter((c) => !fs.existsSync(c));
-  if (missing.length > 0) {
+  const project_id =
+    (typeof data.project_id === "string" && data.project_id) || randomToken();
+
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!serviceKey) {
     return NextResponse.json(
-      { ok: false, message: "Um ou mais clipes não foram encontrados em disco." },
-      { status: 422 }
+      { ok: false, message: "SUPABASE_SERVICE_ROLE_KEY ausente." },
+      { status: 503 }
     );
   }
-
-  await fs.promises.mkdir(FINAL_DIR, { recursive: true }).catch(() => {});
-  const token =
-    (typeof data.project_id === "string" && data.project_id) ||
-    Date.now().toString(16) + Math.random().toString(16).slice(2);
-  const outFile = path.join(FINAL_DIR, `${token}.mp4`);
-  const listFile = path.join(FINAL_DIR, `${token}-list.txt`);
 
   try {
-    try {
-      await concatWithCopy(absClips, listFile, outFile);
-    } catch {
-      if (fs.existsSync(outFile)) fs.unlinkSync(outFile);
-      await concatWithReencode(absClips, outFile);
+    const res = await fetch(FN_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${serviceKey}`,
+      },
+      body: JSON.stringify({ clip_paths, project_id }),
+      cache: "no-store",
+    });
+    const dataFn = await res.json().catch(() => null);
+    if (!res.ok || !dataFn || !dataFn.ok) {
+      return NextResponse.json(
+        {
+          ok: false,
+          message: dataFn?.message || "Falha na montagem remota.",
+        },
+        { status: res.status || 500 }
+      );
     }
+    return NextResponse.json({
+      ok: true,
+      video_url: dataFn.video_url,
+      expires_at: dataFn.expires_at,
+    });
   } catch (e) {
     return NextResponse.json(
-      { ok: false, message: `Falha na montagem ffmpeg: ${(e as Error).message}` },
-      { status: 500 }
-    );
-  } finally {
-    try {
-      if (fs.existsSync(listFile)) await fs.promises.unlink(listFile);
-    } catch {
-      /* noop */
-    }
-  }
-
-  const stat = fs.existsSync(outFile) ? fs.statSync(outFile) : null;
-  if (!stat || stat.size === 0) {
-    return NextResponse.json(
-      { ok: false, message: "A montagem não produziu um arquivo." },
-      { status: 500 }
+      { ok: false, message: `Erro de conexão à Edge Function: ${(e as Error).message}` },
+      { status: 502 }
     );
   }
-
-  return NextResponse.json({
-    ok: true,
-    video_url: `/_final/${token}.mp4`,
-    size_bytes: stat.size,
-  });
 }
