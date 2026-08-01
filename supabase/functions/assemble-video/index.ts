@@ -442,6 +442,7 @@ function buildTrakForOutput(
   clips: Clip[],
   clipMdatDataStarts: number[],
   ftypLength: number,
+  mdatHeaderSize: number,
 ): Uint8Array {
   const first = clips[0];
   const firstBuf = first.buf;
@@ -497,7 +498,7 @@ function buildTrakForOutput(
   for (let ci = 0; ci < clips.length; ci++) {
     const t = trackPerClip[ci];
     const clipOldMdatDataStart = clips[ci].mdatDataStart;
-    const clipNewMdatDataStart = ftypLength + 8 + clipMdatDataStarts[ci];
+    const clipNewMdatDataStart = ftypLength + mdatHeaderSize + clipMdatDataStarts[ci];
     for (const oldOffset of t.stbl.chunkOffsets) {
       newChunkOffsets.push(oldOffset - clipOldMdatDataStart + clipNewMdatDataStart);
     }
@@ -537,7 +538,12 @@ function buildTrakForOutput(
   return mkBox("trak", cat(trakParts));
 }
 
-function buildMoov(clips: Clip[], clipMdatDataStarts: number[], ftypLength: number): Uint8Array {
+function buildMoov(
+  clips: Clip[],
+  clipMdatDataStarts: number[],
+  ftypLength: number,
+  mdatHeaderSize: number,
+): Uint8Array {
   const first = clips[0];
   let totalMvhdDuration = 0;
   for (const c of clips) totalMvhdDuration += c.mvhdDuration;
@@ -545,12 +551,12 @@ function buildMoov(clips: Clip[], clipMdatDataStarts: number[], ftypLength: numb
   const numTracks = first.tracks.length;
   const trakBoxes: Uint8Array[] = [];
   for (let i = 0; i < numTracks; i++) {
-    trakBoxes.push(buildTrakForOutput(i, clips, clipMdatDataStarts, ftypLength));
+    trakBoxes.push(buildTrakForOutput(i, clips, clipMdatDataStarts, ftypLength, mdatHeaderSize));
   }
   return mkBox("moov", cat([newMvhd, ...trakBoxes]));
 }
 
-function combineMdat(clips: Clip[]): { mdatBytes: Uint8Array; clipMdatDataStarts: number[] } {
+function combineMdat(clips: Clip[]): { mdatBytes: Uint8Array; clipMdatDataStarts: number[]; mdatHeaderSize: number } {
   const clipMdatDataStarts: number[] = [];
   let totalLen = 0;
   for (const c of clips) {
@@ -565,13 +571,54 @@ function combineMdat(clips: Clip[]): { mdatBytes: Uint8Array; clipMdatDataStarts
     off += len;
   }
   const totalSize = 8 + mdatData.length;
+  const mdatHeaderSize = totalSize <= 0xffffffff ? 8 : 16;
   let mdatBytes: Uint8Array;
-  if (totalSize <= 0xffffffff) {
+  if (mdatHeaderSize === 8) {
     mdatBytes = cat([w32(totalSize), asc("mdat"), mdatData]);
   } else {
     mdatBytes = cat([w32(1), asc("mdat"), w64(BigInt(16 + mdatData.length)), mdatData]);
   }
-  return { mdatBytes, clipMdatDataStarts };
+  return { mdatBytes, clipMdatDataStarts, mdatHeaderSize };
+}
+
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+function validateClipsCompatible(clips: Clip[]): void {
+  const first = clips[0];
+  for (let ci = 1; ci < clips.length; ci++) {
+    const c = clips[ci];
+    if (c.mvhdTimescale !== first.mvhdTimescale) {
+      throw new Error(
+        `Clipe ${ci} tem timescale de vídeo (mvhd) ${c.mvhdTimescale} diferente do clipe 0 (${first.mvhdTimescale}). Os clipes precisam usar a mesma taxa de tempo para serem concatenados sem dessincronizar.`
+      );
+    }
+    if (c.tracks.length !== first.tracks.length) {
+      throw new Error(`Clipe ${ci} tem ${c.tracks.length} tracks vs ${first.tracks.length} no clipe 0.`);
+    }
+    for (let ti = 0; ti < first.tracks.length; ti++) {
+      const ft = first.tracks[ti];
+      const t = c.tracks[ti];
+      if (t.handlerType !== ft.handlerType) {
+        throw new Error(
+          `Clipe ${ci} tem a track ${ti} do tipo "${t.handlerType}", mas o clipe 0 tem "${ft.handlerType}" na mesma posição — a ordem das tracks precisa ser idêntica entre os clipes.`
+        );
+      }
+      if (t.mdhdTimescale !== ft.mdhdTimescale) {
+        throw new Error(
+          `Clipe ${ci} tem timescale ${t.mdhdTimescale} na track ${ti} (${t.handlerType}) diferente do clipe 0 (${ft.mdhdTimescale}).`
+        );
+      }
+      if (!bytesEqual(t.stbl.stsdRaw, ft.stbl.stsdRaw)) {
+        throw new Error(
+          `Clipe ${ci} tem parâmetros de codec (stsd) diferentes do clipe 0 na track ${ti} (${t.handlerType}) — provável mudança de resolução/perfil entre as cenas geradas.`
+        );
+      }
+    }
+  }
 }
 
 function json(o: unknown, status = 200): Response {
@@ -606,16 +653,15 @@ Deno.serve(async (req) => {
     if (clipBuffers.length === 0) return json({ ok: false, message: "Nenhum clipe válido." }, 400);
 
     const clips: Clip[] = clipBuffers.map(parseClip);
-    const trackCount = clips[0].tracks.length;
-    for (let i = 1; i < clips.length; i++) {
-      if (clips[i].tracks.length !== trackCount) {
-        return json({ ok: false, message: `Clipe ${i} tem ${clips[i].tracks.length} tracks vs ${trackCount} no clipe 0.` }, 400);
-      }
+    try {
+      validateClipsCompatible(clips);
+    } catch (e) {
+      return json({ ok: false, message: (e as Error).message }, 400);
     }
 
     const ftypRaw = clips[0].ftypRaw;
-    const { mdatBytes, clipMdatDataStarts } = combineMdat(clips);
-    const moovBytes = buildMoov(clips, clipMdatDataStarts, ftypRaw.length);
+    const { mdatBytes, clipMdatDataStarts, mdatHeaderSize } = combineMdat(clips);
+    const moovBytes = buildMoov(clips, clipMdatDataStarts, ftypRaw.length, mdatHeaderSize);
     const outBytes = cat([ftypRaw, mdatBytes, moovBytes]);
 
     const finalKey = `${FINAL_PREFIX}${project_id}.mp4`;
