@@ -170,15 +170,14 @@ function buildSrt(project: Project): string {
     .join('');
 }
 
-function buildSummary(project: Project): string {
-  return [
-    'CURTA — Resumo do projeto',
+function buildGenerationTexts(project: Project, roteiro: RoteiroOutput | null): string {
+  const parts = [
+    'CURTA — Textos de geração',
     '==========================',
     'Título: ' + project.titulo,
     'Duração: ' + project.duracao + 's',
     'Estilo de narração: ' + project.estiloNome,
     'Trilha sonora: ' + project.trilhaNome,
-    'Status: ' + (project.status === 'pronto' ? 'Pronto' : project.status),
     'Criado em: ' + project.createdAt,
     '',
     'Roteiro (narração):',
@@ -186,9 +185,21 @@ function buildSummary(project: Project): string {
     '',
     'Roteiro técnico (tabela):',
     project.tabela_md || '(não disponível)',
-    '',
-    '— Gerado no Curta.',
-  ].join('\n');
+  ];
+  if (roteiro?.cenas?.length) {
+    parts.push('', 'Prompts de geração por cena:');
+    for (const c of roteiro.cenas) {
+      parts.push(
+        '',
+        `Cena ${c.index} (${c.tempo}):`,
+        '  Vídeo (PT): ' + c.video_pt,
+        '  Áudio (PT): ' + c.audio_pt,
+        '  Prompt (EN): ' + c.prompt_en
+      );
+    }
+  }
+  parts.push('', 'Legendas (.srt):', '', buildSrt(project), '— Gerado no Curta.');
+  return parts.join('\n');
 }
 
 function escapeHtml(s: string): string {
@@ -1820,22 +1831,16 @@ function WizardShell() {
                   </div>
                   <div className="export-grid">
                     <button
-                      className="btn btn-quiet"
+                      className="btn btn-primary"
                       onClick={() => void downloadVideo(wiz.finalVideoUrl!, slug(exportProject.titulo) + '-final.mp4')}
                     >
-                      Baixar vídeo (.mp4)
+                      Baixar vídeo
                     </button>
                     <button
                       className="btn btn-quiet"
-                      onClick={() => download(slug(exportProject.titulo) + '.srt', buildSrt(exportProject))}
+                      onClick={() => download(slug(exportProject.titulo) + '-textos.txt', buildGenerationTexts(exportProject, roteiro))}
                     >
-                      Baixar legendas (.srt)
-                    </button>
-                    <button
-                      className="btn btn-quiet"
-                      onClick={() => download(slug(exportProject.titulo) + '-resumo.txt', buildSummary(exportProject))}
-                    >
-                      Baixar resumo (.txt)
+                      Baixar textos de geração
                     </button>
                   </div>
                   <p style={{ color: 'var(--success)', fontFamily: 'var(--font-mono)', marginTop: '1rem' }}>
