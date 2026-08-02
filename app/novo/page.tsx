@@ -40,6 +40,9 @@ const WIZ_STEPS: { key: string; label: string }[] = [
 
 const SCENE_ETA_SECONDS = 180;
 const ASSEMBLE_ETA_SECONDS = 45;
+// Acima do maxDuration=60 da rota /api/video/mix, para que o erro da própria
+// rota chegue ao usuário em vez de o cliente desistir antes.
+const MIX_CLIENT_TIMEOUT_MS = 75_000;
 
 const SERVICE_LOGOS: Record<'YouTube' | 'Instagram' | 'LinkedIn', JSX.Element> = {
   YouTube: (
@@ -1154,6 +1157,8 @@ function WizardShell() {
     setProgress(0);
     setWiz((w) => ({ ...w, exportStage: 'running', exportError: null }));
     const finalKeyBase = wiz.finalVideoKey.replace(/^final\//, '').replace(/\.mp4$/, '');
+    const controller = new AbortController();
+    const abortTimer = window.setTimeout(() => controller.abort(), MIX_CLIENT_TIMEOUT_MS);
     try {
       const res = await fetch('/api/video/mix', {
         method: 'POST',
@@ -1164,13 +1169,21 @@ function WizardShell() {
           track_name: trackName,
           project_id: finalKeyBase,
         }),
+        signal: controller.signal,
       });
       const raw = await res.text();
       let data: { ok?: boolean; video_url?: string; video_key?: string; message?: string } = {};
       try {
         data = JSON.parse(raw);
       } catch {
-        data = { message: (raw || '').slice(0, 500) || `Resposta inesperada do servidor (HTTP ${res.status}).` };
+        // 502/504 da Vercel devolvem uma página HTML, não JSON — mostrar o HTML
+        // cru no toast não diz nada ao usuário.
+        data = {
+          message:
+            res.status === 504 || res.status === 502
+              ? 'A geração do vídeo final passou do tempo limite do servidor. Tente novamente; se repetir, reduza a duração do vídeo.'
+              : `Resposta inesperada do servidor (HTTP ${res.status}).`,
+        };
       }
       if (!res.ok || !data.ok || !data.video_url) {
         const msg = data?.message || 'Falha ao gerar o vídeo final.';
@@ -1202,11 +1215,16 @@ function WizardShell() {
       setLastProject(project);
       setStage('done');
       toast('Vídeo final gerado com sucesso!');
-    } catch {
-      const msg = 'Falha de conexão ao gerar o vídeo final.';
+    } catch (e) {
+      const msg =
+        e instanceof DOMException && e.name === 'AbortError'
+          ? 'A geração do vídeo final demorou demais e foi interrompida. Tente novamente.'
+          : 'Falha de conexão ao gerar o vídeo final.';
       setWiz((w) => ({ ...w, exportStage: 'error', exportError: msg }));
       setStage('idle');
       toast(msg);
+    } finally {
+      window.clearTimeout(abortTimer);
     }
   }
 

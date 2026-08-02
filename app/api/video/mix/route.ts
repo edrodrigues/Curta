@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { chmod, copyFile, readFile, unlink, writeFile } from "node:fs/promises";
+import { chmod, copyFile, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import ffmpegPath from "ffmpeg-static";
@@ -14,7 +14,17 @@ export const maxDuration = 60;
 const execFileP = promisify(execFile);
 
 const TRACK_BG_VOLUME = "0.25";
-const FFMPEG_TIMEOUT_MS = 45_000;
+
+// A Vercel mata a invocação em `maxDuration` com FUNCTION_INVOCATION_TIMEOUT
+// (504 + HTML, sem JSON). Trabalhamos dentro de um orçamento menor para sempre
+// devolvermos um erro nosso, legível, antes de a plataforma cortar a conexão.
+const BUDGET_MS = 54_000;
+// Tempo reservado para ler o mp4 do /tmp, subir ao Storage e assinar a URL.
+const UPLOAD_RESERVE_MS = 14_000;
+// Teto absoluto do ffmpeg, mesmo que sobre orçamento.
+const FFMPEG_MAX_MS = 35_000;
+// TTL das URLs assinadas que o ffmpeg consome como entrada.
+const INPUT_URL_TTL_SEC = 300;
 
 function slug(s: string): string {
   return (
@@ -27,19 +37,17 @@ function slug(s: string): string {
   );
 }
 
-async function readStorageToBuffer(bucket: string, key: string): Promise<Buffer> {
+async function storageSignedUrl(bucket: string, key: string): Promise<string> {
   const admin = supabaseAdmin();
-  const { data: signed, error: sErr } = await admin.storage.from(bucket).createSignedUrl(key, 120);
-  if (sErr || !signed?.signedUrl) {
-    throw new Error(`Falha ao gerar URL assinada de ${bucket}/${key}: ${sErr?.message || "sem URL."}`);
+  const { data, error } = await admin.storage
+    .from(bucket)
+    .createSignedUrl(key, INPUT_URL_TTL_SEC);
+  if (error || !data?.signedUrl) {
+    throw new Error(
+      `Falha ao gerar URL assinada de ${bucket}/${key}: ${error?.message || "sem URL."}`
+    );
   }
-  const res = await fetch(signed.signedUrl, { cache: "no-store" });
-  if (!res.ok) {
-    throw new Error(`Falha ao baixar ${bucket}/${key}: HTTP ${res.status}.`);
-  }
-  const buf = Buffer.from(await res.arrayBuffer());
-  if (buf.length === 0) throw new Error(`Arquivo vazio: ${bucket}/${key}.`);
-  return buf;
+  return data.signedUrl;
 }
 
 async function readMusicFile(trackName: string): Promise<Buffer | null> {
@@ -51,29 +59,49 @@ async function readMusicFile(trackName: string): Promise<Buffer | null> {
   }
 }
 
+// A cópia do binário (~80 MB) é memoizada no escopo do módulo: /tmp sobrevive
+// enquanto a instância estiver quente, então isso custa uma vez por instância
+// em vez de uma vez por requisição.
+let ffmpegExecP: Promise<string> | null = null;
+
 async function resolveFfmpeg(): Promise<string> {
-  if (!ffmpegPath) {
+  const bundled = ffmpegPath;
+  if (!bundled) {
     throw new Error("Binário ffmpeg não encontrado no servidor.");
   }
-  if (process.platform === "win32") return ffmpegPath;
-  // Binários rastreados pela output file tracing podem perder a permissão de
-  // execução dentro da função serverless. Copia para /tmp e garante +x.
-  const copy = join(tmpdir(), `ffmpeg-curta-${process.pid}-${Date.now().toString(16)}`);
-  try {
-    await copyFile(ffmpegPath, copy);
-    await chmod(copy, 0o755);
-    return copy;
-  } catch {
-    try {
-      await unlink(copy);
-    } catch {
-      /* best-effort */
-    }
-    return ffmpegPath;
+  if (process.platform === "win32") return bundled;
+  if (!ffmpegExecP) {
+    ffmpegExecP = (async () => {
+      // Binários rastreados pela output file tracing podem perder a permissão de
+      // execução dentro da função serverless. Copia para /tmp e garante +x.
+      const target = join(tmpdir(), "ffmpeg-curta-bin");
+      try {
+        const [src, cached] = await Promise.all([
+          stat(bundled),
+          stat(target).catch(() => null),
+        ]);
+        if (!cached || cached.size !== src.size) {
+          const staging = `${target}.${process.pid}.tmp`;
+          await copyFile(bundled, staging);
+          await chmod(staging, 0o755);
+          await rename(staging, target);
+        } else {
+          await chmod(target, 0o755);
+        }
+        return target;
+      } catch {
+        ffmpegExecP = null; // permite nova tentativa na próxima requisição
+        return bundled;
+      }
+    })();
   }
+  return ffmpegExecP;
 }
 
 export async function POST(req: NextRequest) {
+  const startedAt = Date.now();
+  const elapsed = () => Date.now() - startedAt;
+
   let body: unknown;
   try {
     body = await req.json();
@@ -120,34 +148,44 @@ export async function POST(req: NextRequest) {
 
   const tmp = tmpdir();
   const base = `curta-mix-${projectId}-${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`;
-  const videoPath = join(tmp, base + "-video.mp4");
-  const narrationPath = join(tmp, base + "-narracao.mp3");
   const trackPath = join(tmp, base + "-trilha.wav");
   const outPath = join(tmp, base + "-final.mp4");
-  let ffmpegCopy: string | null = null;
 
   try {
-    const [videoBuf, narrationBuf] = await Promise.all([
-      readStorageToBuffer(VIDEO_BUCKET, videoKey),
-      readStorageToBuffer(AUDIO_BUCKET, narrationKey),
-    ]);
-    await Promise.all([
-      writeFile(videoPath, videoBuf),
-      writeFile(narrationPath, narrationBuf),
+    // O ffmpeg lê os inputs direto do Storage por URL assinada. Antes o vídeo
+    // inteiro era baixado para um Buffer e regravado no /tmp antes de o ffmpeg
+    // começar — uma cópia completa do arquivo em memória e em disco, em série,
+    // dentro do mesmo orçamento de 60s.
+    const [videoUrl, narrationUrl, ffmpegExec] = await Promise.all([
+      storageSignedUrl(VIDEO_BUCKET, videoKey),
+      storageSignedUrl(AUDIO_BUCKET, narrationKey),
+      resolveFfmpeg(),
     ]);
 
     const musicBuf = trackName ? await readMusicFile(trackName) : null;
     if (musicBuf) await writeFile(trackPath, musicBuf);
 
-    const ffmpegExec = await resolveFfmpeg();
-    if (ffmpegExec !== ffmpegPath) ffmpegCopy = ffmpegExec;
+    const httpIn = [
+      "-reconnect",
+      "1",
+      "-reconnect_streamed",
+      "1",
+      "-reconnect_delay_max",
+      "5",
+    ];
 
     const args = [
+      "-nostdin",
+      "-hide_banner",
+      "-loglevel",
+      "error",
       "-y",
+      ...httpIn,
       "-i",
-      videoPath,
+      videoUrl,
+      ...httpIn,
       "-i",
-      narrationPath,
+      narrationUrl,
     ];
     if (musicBuf) {
       args.push("-i", trackPath);
@@ -171,11 +209,29 @@ export async function POST(req: NextRequest) {
       "192k",
       "-movflags",
       "+faststart",
+      // `apad` produz silêncio infinito; `-shortest` fecha a saída no fim da
+      // trilha de vídeo. Isso já funciona sozinho no build atual do
+      // ffmpeg-static (verificado), mas em alguns builds o EOF não atravessa o
+      // filter_complex e o encode de áudio segue indefinidamente. Os dois flags
+      // abaixo são uma trava barata contra esse caso.
       "-shortest",
+      "-fflags",
+      "+shortest",
+      "-max_interleave_delta",
+      "100M",
       outPath
     );
 
-    await execFileP(ffmpegExec, args, { timeout: FFMPEG_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 });
+    const ffmpegBudget = BUDGET_MS - elapsed() - UPLOAD_RESERVE_MS;
+    if (ffmpegBudget <= 0) {
+      throw new Error("Sem tempo hábil para montar o vídeo. Tente novamente.");
+    }
+
+    await execFileP(ffmpegExec, args, {
+      timeout: Math.min(FFMPEG_MAX_MS, ffmpegBudget),
+      killSignal: "SIGKILL",
+      maxBuffer: 8 * 1024 * 1024,
+    });
 
     const outBuf = await readFile(outPath);
     if (outBuf.length === 0) {
@@ -206,8 +262,12 @@ export async function POST(req: NextRequest) {
       expires_at: new Date(Date.now() + 3600 * 1000).toISOString(),
     });
   } catch (e) {
-    const err = e as Error & { stderr?: string | Buffer };
+    const err = e as Error & { stderr?: string | Buffer; killed?: boolean };
     let message = err?.message || "Falha ao montar o vídeo final.";
+    if (err?.killed) {
+      message =
+        "A montagem do vídeo passou do tempo limite do servidor. Tente novamente; se repetir, reduza a duração ou a resolução do vídeo.";
+    }
     if (err?.stderr) {
       const snippet = (Buffer.isBuffer(err.stderr) ? err.stderr.toString() : err.stderr)
         .trim()
@@ -217,19 +277,12 @@ export async function POST(req: NextRequest) {
       if (snippet) message = `${message} | ${snippet}`;
     }
     if (message.length > 4000) message = message.slice(0, 4000);
-    console.error("[video/mix]", message);
+    console.error(`[video/mix] ${elapsed()}ms`, message);
     return NextResponse.json({ ok: false, message }, { status: 502 });
   } finally {
-    for (const p of [videoPath, narrationPath, trackPath, outPath]) {
+    for (const p of [trackPath, outPath]) {
       try {
         await unlink(p);
-      } catch {
-        /* best-effort */
-      }
-    }
-    if (ffmpegCopy) {
-      try {
-        await unlink(ffmpegCopy);
       } catch {
         /* best-effort */
       }
