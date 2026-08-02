@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import { KineticPreview } from '@/components/Canvas';
 import {
   emptyBrief,
@@ -69,10 +70,9 @@ const SERVICE_LOGOS: Record<'YouTube' | 'Instagram' | 'LinkedIn', JSX.Element> =
   ),
 };
 
-const GEN_STAGES = [
-  'Sintetizando narração (ElevenLabs via Monid)',
-  'Compondo trilha sonora',
-  'Renderizando cenas animadas',
+const EXPORT_STAGES = [
+  'Baixando vídeo e narração',
+  'Misturando áudio no vídeo',
   'Finalizando arquivo de vídeo',
 ];
 
@@ -117,6 +117,8 @@ const initialWiz: WizardData = {
   narrationKey: null,
   narrationUrl: null,
   narrationError: null,
+  exportStage: 'idle',
+  exportError: null,
 };
 
 type Stage = 'idle' | 'running' | 'done';
@@ -258,11 +260,15 @@ function WizardShell() {
   const [analyzePhase, setAnalyzePhase] = useState(-1);
   const [briefAttempted, setBriefAttempted] = useState(false);
   const [roteiroStageIdx, setRoteiroStageIdx] = useState(0);
+  const [exportStageIdx, setExportStageIdx] = useState(0);
   const [progress, setProgress] = useState(0);
   const [lastProject, setLastProject] = useState<Project | null>(null);
   const [autoAnalyzed, setAutoAnalyzed] = useState(false);
   const [loadingProject, setLoadingProject] = useState(!!projectIdParam);
   const [dbProjectId, setDbProjectId] = useState<string | null>(null);
+  const [couponCode, setCouponCode] = useState('');
+  const [redeemingCoupon, setRedeemingCoupon] = useState(false);
+  const [couponError, setCouponError] = useState('');
   const ensureDraftRef = useRef(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const videoStartedAtRef = useRef<number | null>(null);
@@ -430,6 +436,13 @@ function WizardShell() {
       toast('Escolha uma duração para continuar.');
       return false;
     }
+    if (key === 'duracao' && wiz.duration) {
+      const cost = wiz.duration === 60 ? 2 : 1;
+      if (store.credits < cost) {
+        toast(`Você precisa de ${cost} crédito(s) para continuar. Compre créditos ou aplique um cupom abaixo.`);
+        return false;
+      }
+    }
     if (key === 'formato' && !wiz.videoFormat) {
       toast('Escolha um formato de vídeo para continuar.');
       return false;
@@ -475,6 +488,8 @@ function WizardShell() {
         narrationKey: null,
         narrationUrl: null,
         narrationError: null,
+        exportStage: 'idle',
+        exportError: null,
       }));
       goToStep(stepIndex + 1);
       return;
@@ -487,6 +502,32 @@ function WizardShell() {
   }
   function goBack() {
     if (stepIndex > 0) goToStep(stepIndex - 1);
+  }
+
+  async function redeemCoupon() {
+    const code = couponCode.trim();
+    if (!code) return;
+    setRedeemingCoupon(true);
+    setCouponError('');
+    try {
+      const res = await fetch('/api/cupons/redeem', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      });
+      const json = await res.json();
+      if (!json.ok) {
+        setCouponError(json.message || 'Não foi possível aplicar o cupom.');
+        return;
+      }
+      store.addCredits(json.credits);
+      setCouponCode('');
+      toast(`+${json.credits} crédito(s) aplicados com o cupom ${code.toUpperCase()}.`);
+    } catch {
+      setCouponError('Falha de conexão ao aplicar o cupom.');
+    } finally {
+      setRedeemingCoupon(false);
+    }
   }
 
   const videoRunningRef = useRef(false);
@@ -875,6 +916,18 @@ function WizardShell() {
   }, [key]);
 
   useEffect(() => {
+    if (key === 'exportar' && stage === 'running') {
+      const id = window.setInterval(() => {
+        setExportStageIdx((i) => Math.min(i + 1, EXPORT_STAGES.length - 1));
+      }, 4000);
+      return () => window.clearInterval(id);
+    }
+    setExportStageIdx(0);
+    return undefined;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, stage]);
+
+  useEffect(() => {
     if (key === 'link' && pendingUrl && !autoAnalyzed && !analyzing) {
       setAutoAnalyzed(true);
       void analyzeLink();
@@ -1053,42 +1106,14 @@ function WizardShell() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, wiz.videoStage]);
 
-  function startGeneration() {
-    const cost = wiz.duration === 60 ? 2 : 1;
-    if (store.credits < cost) {
-      toast('Créditos insuficientes. Compre mais créditos para continuar.');
-      router.push('/creditos');
-      return;
-    }
-    setStage('running');
-    setProgress(0);
-    let s = 0;
-    const tick = () => {
-      s += 1;
-      setProgress(Math.round((s / GEN_STAGES.length) * 100));
-      if (s < GEN_STAGES.length) {
-        window.setTimeout(tick, 650 + Math.random() * 400);
-      } else {
-        finishGeneration(cost);
-      }
-    };
-    window.setTimeout(tick, 700);
-  }
-
-  function finishGeneration(cost: number) {
-    const roteiro = wiz.roteiro;
-    if (!roteiro) {
-      toast('Roteiro ausente. Volte e gere antes de finalizar.');
-      setStage('idle');
-      return;
-    }
-    const styleObj = matchStyle(roteiro.voz.estilo);
-    const trilhaNome = matchTrack(roteiro.trilha_mood);
-    const project: Project = {
+  function buildExportProject(): Project {
+    const styleObj = roteiro ? matchStyle(roteiro.voz.estilo) : { id: '', nome: '' };
+    const trilhaNome = roteiro ? matchTrack(roteiro.trilha_mood) : TRACKS[0];
+    return {
       id: dbProjectId || genId(),
       titulo: wiz.brief.produto || 'Vídeo sem título',
-      roteiro: roteiro.narracao_texto,
-      tabela_md: roteiro.tabela_md,
+      roteiro: roteiro?.narracao_texto || '',
+      tabela_md: roteiro?.tabela_md,
       duracao: wiz.duration || 30,
       videoFormat: wiz.videoFormat ?? undefined,
       estiloId: styleObj.id,
@@ -1098,17 +1123,94 @@ function WizardShell() {
       createdAt: new Date().toISOString().slice(0, 10),
       videoUrl: wiz.finalVideoUrl || undefined,
     };
-    store.chargeCredits(cost);
-    if (dbProjectId) {
-      void updateProjectStatus(dbProjectId, 'pronto', {
-        ...(wiz.finalVideoUrl && { video_url: wiz.finalVideoUrl }),
-        ...(wiz.narrationKey && { audio_url: wiz.narrationKey }),
-        credits_charged: cost,
-      });
+  }
+
+  async function exportFinalVideo() {
+    // Créditos já foram validados/pagos no gateway do passo 1 (Duração).
+    const cost = wiz.duration === 60 ? 2 : 1;
+    if (wiz.videoStage !== 'done' || !wiz.finalVideoKey) {
+      toast('Gere o vídeo na etapa Vídeo antes de exportar.');
+      goToStep(WIZ_STEPS.findIndex((s) => s.key === 'preview-video'));
+      return;
     }
-    setLastProject(project);
-    setStage('done');
-    toast('Vídeo gerado com sucesso!');
+    if (wiz.narrationStage !== 'done' || !wiz.narrationKey) {
+      toast('Gere a narração na etapa Áudio antes de exportar.');
+      goToStep(WIZ_STEPS.findIndex((s) => s.key === 'preview-audio'));
+      return;
+    }
+    setExportStageIdx(0);
+    setStage('running');
+    setProgress(0);
+    setWiz((w) => ({ ...w, exportStage: 'running', exportError: null }));
+    const finalKeyBase = wiz.finalVideoKey.replace(/^final\//, '').replace(/\.mp4$/, '');
+    try {
+      const res = await fetch('/api/video/mix', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          video_key: wiz.finalVideoKey,
+          narration_key: wiz.narrationKey,
+          track_name: trackName,
+          project_id: finalKeyBase,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok || !data.video_url) {
+        const msg = data?.message || 'Falha ao gerar o vídeo final.';
+        setWiz((w) => ({ ...w, exportStage: 'error', exportError: msg }));
+        setStage('idle');
+        toast(msg);
+        return;
+      }
+      const project: Project = {
+        ...buildExportProject(),
+        videoUrl: data.video_url,
+      };
+      store.chargeCredits(cost);
+      if (dbProjectId) {
+        await updateProjectStatus(dbProjectId, 'pronto', {
+          video_url: data.video_url,
+          ...(wiz.narrationKey && { audio_url: wiz.narrationKey }),
+          credits_charged: cost,
+        });
+      }
+      setWiz((w) => ({
+        ...w,
+        finalVideoUrl: data.video_url,
+        finalVideoKey: typeof data.video_key === 'string' ? data.video_key : w.finalVideoKey,
+        videoStage: 'done',
+        exportStage: 'done',
+        exportError: null,
+      }));
+      setLastProject(project);
+      setStage('done');
+      toast('Vídeo final gerado com sucesso!');
+    } catch {
+      const msg = 'Falha de conexão ao gerar o vídeo final.';
+      setWiz((w) => ({ ...w, exportStage: 'error', exportError: msg }));
+      setStage('idle');
+      toast(msg);
+    }
+  }
+
+  async function downloadVideo(url: string, filename: string) {
+    if (typeof window === 'undefined') return;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = objectUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(objectUrl);
+      toast('Download iniciado: ' + filename);
+    } catch {
+      toast('Não foi possível baixar o vídeo.');
+    }
   }
 
   function download(filename: string, text: string) {
@@ -1165,8 +1267,11 @@ function WizardShell() {
   }
 
   const eyebrowText = `Passo ${stepIndex + 1} de ${WIZ_STEPS.length}`;
+  const creditsCost = wiz.duration === 60 ? 2 : 1;
+  const hasEnoughCredits = store.credits >= creditsCost;
   const navVisible = key !== 'gerando' && key !== 'roteiro' && key !== 'exportar';
   const videoActive = wiz.videoStage === 'running' || wiz.videoStage === 'assembling';
+  const exportDone = wiz.exportStage === 'done' && !!wiz.finalVideoUrl;
   const roteiro = wiz.roteiro;
   const tableHtml = roteiro ? renderMarkdownTable(roteiro.tabela_md) : '';
   const trackName = roteiro ? matchTrack(roteiro.trilha_mood) : TRACKS[0];
@@ -1227,6 +1332,40 @@ function WizardShell() {
             <div className="price-figure"><span className="now">R$ 50</span></div>
             <p className="credits-note">2 créditos</p>
           </button>
+        </div>
+
+        <div className="card" style={{ marginTop: '1.5rem' }}>
+          <div className="card-row">
+            <h3>Créditos</h3>
+            <span className="sub">Saldo: {store.credits} crédito(s)</span>
+          </div>
+          {!hasEnoughCredits && (
+            <p className="hint is-error" style={{ marginBottom: '1rem' }}>
+              Você precisa de {creditsCost} crédito(s) para um vídeo de {wiz.duration}s e tem {store.credits}. Compre créditos ou aplique um cupom para continuar.
+            </p>
+          )}
+          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <label className="field" style={{ flex: '1 1 220px', marginBottom: 0 }}>
+              <span className="l">Cupom de geração</span>
+              <input
+                type="text"
+                value={couponCode}
+                onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
+                placeholder="CURTA10"
+                disabled={redeemingCoupon}
+              />
+            </label>
+            <button
+              className="btn btn-quiet"
+              onClick={redeemCoupon}
+              disabled={redeemingCoupon || !couponCode.trim()}
+            >
+              {redeemingCoupon && <span className="spinner" aria-hidden="true" />}
+              {redeemingCoupon ? 'Aplicando…' : 'Aplicar cupom'}
+            </button>
+            <Link className="btn btn-ghost" href="/creditos">Comprar créditos</Link>
+          </div>
+          {couponError && <p className="hint is-error" style={{ marginTop: '0.5rem' }}>{couponError}</p>}
         </div>
       </div>
 
@@ -1646,50 +1785,107 @@ function WizardShell() {
           Isso vai consumir {wiz.duration === 60 ? '2 créditos (R$ 50)' : '1 crédito (R$ 25, oferta)'} do seu saldo e gerar o vídeo final.
         </p>
         <div className="gerar-stage">
-          {stage === 'idle' && (
-            <button className="btn btn-primary btn-lg btn-block" onClick={startGeneration}>
-              Gerar vídeo final
-            </button>
-          )}
-          {stage === 'running' && (
-            <div>
-              <div className="progress-track"><div className="progress-fill" style={{ width: progress + '%' }} /></div>
-              <div className="progress-log">
-                {GEN_STAGES.map((s, i) => {
-                  const pct = Math.round(((i + 1) / GEN_STAGES.length) * 100);
-                  const cls = pct <= progress ? 'done' : i === Math.floor(progress / (100 / GEN_STAGES.length)) ? 'active' : '';
-                  return <div key={s} className={cls}>{s}</div>;
-                })}
-              </div>
-            </div>
-          )}
-          {stage === 'done' && lastProject && (
-            <div>
-              <div className="preview-stage" style={{ marginBottom: '1rem' }}>
-                <span className="preview-badge">Pronto</span>
-                <KineticPreview script={lastProject.roteiro} title={lastProject.titulo} />
-              </div>
-              <div className="export-grid">
-                <button
-                  className="btn btn-quiet"
-                  onClick={() => download(slug(lastProject.titulo) + '.srt', buildSrt(lastProject))}
-                >
-                  Baixar legendas (.srt)
-                </button>
-                <button
-                  className="btn btn-quiet"
-                  onClick={() => download(slug(lastProject.titulo) + '-resumo.txt', buildSummary(lastProject))}
-                >
-                  Baixar resumo (.txt)
-                </button>
-              </div>
-              <p style={{ color: 'var(--success)', fontFamily: 'var(--font-mono)', marginTop: '1rem' }}>
-                Vídeo gerado. Baixe os arquivos ou crie outro.
-              </p>
-            </div>
-          )}
+          {(() => {
+            const missingVideo = wiz.videoStage !== 'done' || !wiz.finalVideoKey;
+            const missingNarration = wiz.narrationStage !== 'done' || !wiz.narrationKey;
+            if (stage === 'running') {
+              return (
+                <div>
+                  <div className="progress-track is-indeterminate" aria-hidden="true"><div className="progress-fill" /></div>
+                  <div className="progress-log" style={{ marginTop: '1rem' }}>
+                    {EXPORT_STAGES.map((s, i) => {
+                      const isDone = i < exportStageIdx;
+                      const isActive = i === exportStageIdx;
+                      return (
+                        <div key={s} className={isDone ? 'done' : isActive ? 'active' : ''}>
+                          {s}
+                          {isActive && <span className="thinking-dots"><i /><i /><i /></span>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="await-card" style={{ marginTop: '1rem' }}>
+                    Misturando a narração e a trilha no vídeo — costuma levar <b>~1 minuto</b>. Não saia da página.
+                  </div>
+                </div>
+              );
+            }
+            if (exportDone) {
+              const exportProject = lastProject ?? buildExportProject();
+              return (
+                <div>
+                  <div className="preview-stage final-stage" style={{ marginBottom: '1rem' }}>
+                    <span className="preview-badge">Pronto</span>
+                    <video className="final-video" src={wiz.finalVideoUrl!} controls playsInline preload="metadata" />
+                  </div>
+                  <div className="export-grid">
+                    <button
+                      className="btn btn-quiet"
+                      onClick={() => void downloadVideo(wiz.finalVideoUrl!, slug(exportProject.titulo) + '-final.mp4')}
+                    >
+                      Baixar vídeo (.mp4)
+                    </button>
+                    <button
+                      className="btn btn-quiet"
+                      onClick={() => download(slug(exportProject.titulo) + '.srt', buildSrt(exportProject))}
+                    >
+                      Baixar legendas (.srt)
+                    </button>
+                    <button
+                      className="btn btn-quiet"
+                      onClick={() => download(slug(exportProject.titulo) + '-resumo.txt', buildSummary(exportProject))}
+                    >
+                      Baixar resumo (.txt)
+                    </button>
+                  </div>
+                  <p style={{ color: 'var(--success)', fontFamily: 'var(--font-mono)', marginTop: '1rem' }}>
+                    Vídeo final gerado com narração e trilha. Baixe os arquivos ou crie outro.
+                  </p>
+                </div>
+              );
+            }
+            if (wiz.exportStage === 'error') {
+              return (
+                <div className="roteiro-aviso">
+                  <p className="eyebrow">Erro</p>
+                  <p>{wiz.exportError || 'Falha ao gerar o vídeo final.'}</p>
+                  <div className="roteiro-actions" style={{ marginTop: '1rem' }}>
+                    <button className="btn btn-primary" type="button" onClick={() => void exportFinalVideo()}>
+                      Tentar novamente
+                    </button>
+                  </div>
+                </div>
+              );
+            }
+            if (missingVideo || missingNarration) {
+              return (
+                <div className="roteiro-aviso">
+                  <p className="eyebrow">Atenção</p>
+                  <p>
+                    {missingVideo
+                      ? 'Gere o vídeo na etapa Vídeo antes de exportar.'
+                      : 'Gere a narração na etapa Áudio antes de exportar.'}
+                  </p>
+                  <div className="roteiro-actions" style={{ marginTop: '1rem' }}>
+                    <button
+                      className="btn btn-primary"
+                      type="button"
+                      onClick={() => goToStep(WIZ_STEPS.findIndex((s) => s.key === (missingVideo ? 'preview-video' : 'preview-audio')))}
+                    >
+                      {missingVideo ? 'Ir para o vídeo' : 'Ir para o áudio'}
+                    </button>
+                  </div>
+                </div>
+              );
+            }
+            return (
+              <button className="btn btn-primary btn-lg btn-block" onClick={() => void exportFinalVideo()}>
+                Gerar vídeo final
+              </button>
+            );
+          })()}
         </div>
-        {stage === 'done' && (
+        {(stage === 'done' || (stage === 'idle' && wiz.exportStage === 'done')) && (
           <div className="wizard-nav" style={{ marginTop: '1.5rem', maxWidth: 'none' }}>
             <button className="btn btn-ghost" onClick={() => router.push('/projetos')}>Ver meus projetos</button>
             <button className="btn btn-primary" onClick={resetWizard}>Criar outro vídeo</button>

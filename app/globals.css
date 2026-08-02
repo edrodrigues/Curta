@@ -411,7 +411,7 @@ footer.site-footer { border-top: 1px solid var(--border); padding: 2.5rem 0; }
 
 label.field { display: block; margin-bottom: 1.5rem; }
 label.field .l { display: block; font-family: var(--font-mono); font-size: var(--step--1); letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-dim); margin-bottom: 0.5rem; }
-.field input[type="text"], .field textarea, .field input[type="email"], .field input[type="password"], .field input[type="url"] {
+.field input[type="text"], .field textarea, .field input[type="email"], .field input[type="password"], .field input[type="url"], .field input[type="number"], .field input[type="date"] {
   width: 100%; font-family: var(--font-body); font-size: var(--step-0); color: var(--text);
   background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--radius-s); padding: 0.75rem 0.9rem;
 }

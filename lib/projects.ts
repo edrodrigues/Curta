@@ -1,6 +1,6 @@
 import { createSupabaseBrowser } from '@/lib/supabase/client';
 import type { Database, Json } from '@/lib/database.types';
-import { emptyBrief, type Brief, type NarrationStage, type Project, type ProjectStatus, type RoteiroOutput, type SceneRender, type VideoFormatKey, type VideoStage, type WizardData } from '@/lib/types';
+import { emptyBrief, type Brief, type ExportStage, type NarrationStage, type Project, type ProjectStatus, type RoteiroOutput, type SceneRender, type VideoFormatKey, type VideoStage, type WizardData } from '@/lib/types';
 
 type ProjectsRow = Database['public']['Tables']['projects']['Row'];
 type ProjectsInsert = Database['public']['Tables']['projects']['Insert'];
@@ -27,6 +27,8 @@ export type WizardState = {
   narrationKey: string | null;
   narrationUrl: string | null;
   narrationError: string | null;
+  exportStage: ExportStage;
+  exportError: string | null;
 };
 
 export type ProjectExtras = {
@@ -59,6 +61,8 @@ export function wizardStateFromWizard(wiz: WizardData, stepIndex: number, extras
     narrationKey: wiz.narrationKey,
     narrationUrl: wiz.narrationUrl,
     narrationError: wiz.narrationError,
+    exportStage: wiz.exportStage,
+    exportError: wiz.exportError,
   };
 }
 
@@ -79,6 +83,8 @@ export function wizardFromState(ws: WizardState | null, row: ProjectsRow): { wiz
     narrationKey: ws?.narrationKey ?? row.audio_url ?? null,
     narrationUrl: ws?.narrationUrl ?? null,
     narrationError: ws?.narrationError ?? null,
+    exportStage: ws?.exportStage ?? 'idle',
+    exportError: ws?.exportError ?? null,
   };
   return { wizard, stepIndex: ws?.stepIndex ?? 0 };
 }

@@ -11,4 +11,7 @@ schema_paths = [
   "./schemas/07_apply_purchase.sql",
   "./schemas/08_rls_policies.sql",
   "./schemas/09_storage.sql",
+  "./schemas/10_credit_coupons.sql",
+  "./schemas/11_coupon_redemptions.sql",
+  "./schemas/12_redeem_coupon.sql",
 ]

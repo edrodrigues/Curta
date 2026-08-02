@@ -86,3 +86,8 @@ create policy "render_jobs_owner_select" on public.render_jobs
       and p.user_id = (select auth.uid())
     )
   );
+
+-- credit_coupons and coupon_redemptions RLS is enabled inline in
+-- 10_credit_coupons.sql / 11_coupon_redemptions.sql, since those tables are
+-- created after this file in schema_paths (db.migrations order matters for
+-- a from-scratch rebuild).
