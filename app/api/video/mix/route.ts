@@ -27,11 +27,16 @@ function slug(s: string): string {
 }
 
 async function readStorageToBuffer(bucket: string, key: string): Promise<Buffer> {
-  const { data, error } = await supabaseAdmin().storage.from(bucket).download(key);
-  if (error || !data) {
-    throw new Error(`Falha ao baixar ${bucket}/${key}: ${error?.message || "sem dados."}`);
+  const admin = supabaseAdmin();
+  const { data: signed, error: sErr } = await admin.storage.from(bucket).createSignedUrl(key, 120);
+  if (sErr || !signed?.signedUrl) {
+    throw new Error(`Falha ao gerar URL assinada de ${bucket}/${key}: ${sErr?.message || "sem URL."}`);
   }
-  const buf = Buffer.from(await data.arrayBuffer());
+  const res = await fetch(signed.signedUrl, { cache: "no-store" });
+  if (!res.ok) {
+    throw new Error(`Falha ao baixar ${bucket}/${key}: HTTP ${res.status}.`);
+  }
+  const buf = Buffer.from(await res.arrayBuffer());
   if (buf.length === 0) throw new Error(`Arquivo vazio: ${bucket}/${key}.`);
   return buf;
 }
