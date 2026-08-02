@@ -1165,7 +1165,13 @@ function WizardShell() {
           project_id: finalKeyBase,
         }),
       });
-      const data = await res.json();
+      const raw = await res.text();
+      let data: { ok?: boolean; video_url?: string; video_key?: string; message?: string } = {};
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        data = { message: (raw || '').slice(0, 500) || `Resposta inesperada do servidor (HTTP ${res.status}).` };
+      }
       if (!res.ok || !data.ok || !data.video_url) {
         const msg = data?.message || 'Falha ao gerar o vídeo final.';
         setWiz((w) => ({ ...w, exportStage: 'error', exportError: msg }));
@@ -1187,7 +1193,7 @@ function WizardShell() {
       }
       setWiz((w) => ({
         ...w,
-        finalVideoUrl: data.video_url,
+        finalVideoUrl: data.video_url || null,
         finalVideoKey: typeof data.video_key === 'string' ? data.video_key : w.finalVideoKey,
         videoStage: 'done',
         exportStage: 'done',

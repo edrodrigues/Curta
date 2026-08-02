@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { readFile, unlink, writeFile } from "node:fs/promises";
+import { chmod, copyFile, readFile, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import ffmpegPath from "ffmpeg-static";
@@ -9,11 +9,12 @@ import { supabaseAdmin, VIDEO_BUCKET, AUDIO_BUCKET } from "@/lib/supabase/admin"
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 120;
+export const maxDuration = 60;
 
 const execFileP = promisify(execFile);
 
 const TRACK_BG_VOLUME = "0.25";
+const FFMPEG_TIMEOUT_MS = 45_000;
 
 function slug(s: string): string {
   return (
@@ -47,6 +48,28 @@ async function readMusicFile(trackName: string): Promise<Buffer | null> {
     return await readFile(join(process.cwd(), "public", "audio", filename));
   } catch {
     return null;
+  }
+}
+
+async function resolveFfmpeg(): Promise<string> {
+  if (!ffmpegPath) {
+    throw new Error("Binário ffmpeg não encontrado no servidor.");
+  }
+  if (process.platform === "win32") return ffmpegPath;
+  // Binários rastreados pela output file tracing podem perder a permissão de
+  // execução dentro da função serverless. Copia para /tmp e garante +x.
+  const copy = join(tmpdir(), `ffmpeg-curta-${process.pid}-${Date.now().toString(16)}`);
+  try {
+    await copyFile(ffmpegPath, copy);
+    await chmod(copy, 0o755);
+    return copy;
+  } catch {
+    try {
+      await unlink(copy);
+    } catch {
+      /* best-effort */
+    }
+    return ffmpegPath;
   }
 }
 
@@ -101,6 +124,7 @@ export async function POST(req: NextRequest) {
   const narrationPath = join(tmp, base + "-narracao.mp3");
   const trackPath = join(tmp, base + "-trilha.wav");
   const outPath = join(tmp, base + "-final.mp4");
+  let ffmpegCopy: string | null = null;
 
   try {
     const [videoBuf, narrationBuf] = await Promise.all([
@@ -114,6 +138,9 @@ export async function POST(req: NextRequest) {
 
     const musicBuf = trackName ? await readMusicFile(trackName) : null;
     if (musicBuf) await writeFile(trackPath, musicBuf);
+
+    const ffmpegExec = await resolveFfmpeg();
+    if (ffmpegExec !== ffmpegPath) ffmpegCopy = ffmpegExec;
 
     const args = [
       "-y",
@@ -148,7 +175,7 @@ export async function POST(req: NextRequest) {
       outPath
     );
 
-    await execFileP(ffmpegPath, args, { timeout: 100_000, maxBuffer: 64 * 1024 * 1024 });
+    await execFileP(ffmpegExec, args, { timeout: FFMPEG_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 });
 
     const outBuf = await readFile(outPath);
     if (outBuf.length === 0) {
@@ -179,13 +206,30 @@ export async function POST(req: NextRequest) {
       expires_at: new Date(Date.now() + 3600 * 1000).toISOString(),
     });
   } catch (e) {
-    const message = (e as Error).message || "Falha ao montar o vídeo final.";
+    const err = e as Error & { stderr?: string | Buffer };
+    let message = err?.message || "Falha ao montar o vídeo final.";
+    if (err?.stderr) {
+      const snippet = (Buffer.isBuffer(err.stderr) ? err.stderr.toString() : err.stderr)
+        .trim()
+        .split(/\r?\n/)
+        .slice(-15)
+        .join(" ");
+      if (snippet) message = `${message} | ${snippet}`;
+    }
+    if (message.length > 4000) message = message.slice(0, 4000);
     console.error("[video/mix]", message);
     return NextResponse.json({ ok: false, message }, { status: 502 });
   } finally {
     for (const p of [videoPath, narrationPath, trackPath, outPath]) {
       try {
         await unlink(p);
+      } catch {
+        /* best-effort */
+      }
+    }
+    if (ffmpegCopy) {
+      try {
+        await unlink(ffmpegCopy);
       } catch {
         /* best-effort */
       }
